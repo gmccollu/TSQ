@@ -660,13 +660,28 @@ Use the included `analyze-logs.sh` script to generate usage statistics:
 - Daily activity breakdown
 - Common error types
 
+### Logging Limitations
+
+**Datagram Server (Rust):**
+- ✅ Logs client IP addresses
+- ✅ Full per-session tracking
+- ✅ Query count and duration
+
+**Stream Server (Python):**
+- ⚠️ **Cannot log client IP addresses** due to `aioquic` library limitation
+- ✅ Logs session statistics (query count, duration, status)
+- ✅ Still provides valuable usage data
+
+**Note:** The `aioquic` library does not expose peer addresses through its stream handler interface. Stream server logs show aggregate statistics without client IPs. Datagram server provides full IP tracking.
+
 ### Privacy Considerations
 
 **What we log:**
-- ✅ Client IP addresses (for debugging and statistics)
+- ✅ Client IP addresses (datagrams only)
 - ✅ Request timestamps
 - ✅ Success/failure status
 - ✅ Performance metrics
+- ✅ Session statistics
 
 **What we DON'T log:**
 - ❌ No personally identifiable information

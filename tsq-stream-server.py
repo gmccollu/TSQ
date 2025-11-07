@@ -54,25 +54,20 @@ def parse_tlvs(data: bytes) -> list:
         offset += consumed
     return tlvs
 
-def log_session(client_ip: str, query_count: int, duration_ms: float):
-    """Log client session with timestamp, IP, query count, and duration"""
+def log_session(query_count: int, duration_ms: float):
+    """Log session statistics (no client IP due to aioquic limitation)"""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
-    print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream queries={query_count} duration={duration_ms:.1f}ms")
+    print(f"[TSQ-LOG] {timestamp} protocol=stream queries={query_count} duration={duration_ms:.1f}ms")
 
-def log_request(client_ip: str, status: str, error: str):
+def log_request(status: str, error: str):
     """Log failed request"""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
-    print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} error=\"{error}\"")
+    print(f"[TSQ-LOG] {timestamp} protocol=stream status={status} error=\"{error}\"")
 
 async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    # Get client address from stored peer addresses
-    writer_id = id(writer)
-    client_ip = connection_peers.get(writer_id, 'unknown')
-    
-    print(f"[TSQ] New stream connection from {client_ip}")
-    
     session_start = time.time()
     query_count = 0
+    writer_id = id(writer)
     
     try:
         # Read request
@@ -81,7 +76,7 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         
         # Parse nonce
         if len(request_data) < 18:
-            log_request(client_ip, "FAILED", "Request too short")
+            log_request("FAILED", "Request too short")
             return
         nonce = request_data[2:18]
         query_count += 1
@@ -120,15 +115,9 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         print(f"[TSQ] Error handling stream: {e}")
     finally:
         # Always log session summary when closing
-        print(f"[TSQ] Closing connection from {client_ip}, queries={query_count}")
         session_duration = (time.time() - session_start) * 1000.0  # Convert to ms
         if query_count > 0:
-            log_session(client_ip, query_count, session_duration)
-        else:
-            print(f"[TSQ] No queries processed for {client_ip}")
-        
-        # Clean up stored peer address
-        connection_peers.pop(writer_id, None)
+            log_session(query_count, session_duration)
         
         # Close writer
         try:
@@ -145,20 +134,9 @@ active_tasks = set()
 
 def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     # aioquic calls this synchronously, so we spawn our async handler
-    # Try to get the actual peer address from the transport
-    transport = writer.transport
-    if hasattr(transport, '_transport') and hasattr(transport._transport, '_addr'):
-        # aioquic wraps the transport, dig into it
-        peer_addr = transport._transport._addr
-        print(f"[TSQ-DEBUG] Got peer address from transport: {peer_addr}")
-    
     task = asyncio.create_task(handle_stream(reader, writer))
     active_tasks.add(task)
     task.add_done_callback(active_tasks.discard)
-
-
-# Store peer addresses globally - map from connection to peer IP
-connection_peers = {}
 
 async def main():
     ap = argparse.ArgumentParser(description="TSQ QUIC Server")
@@ -173,36 +151,15 @@ async def main():
 
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
+    print(f"[TSQ] Note: Stream server logs statistics only (no client IPs due to aioquic limitation)")
     
-    # Wrap stream handler to capture connection info
     from aioquic.asyncio import serve
-    
-    # Create a wrapper that extracts peer info from the server's connection registry
-    original_handler = stream_handler
-    
-    def wrapped_handler(reader, writer):
-        # The writer object has a _protocol which has _quic which has the connection
-        # Try to extract peer from the QUIC layer
-        try:
-            if hasattr(writer, '_protocol'):
-                proto = writer._protocol
-                if hasattr(proto, '_quic'):
-                    quic_conn = proto._quic
-                    # The QUIC connection has _network_paths which contains peer addresses
-                    if hasattr(quic_conn, '_network_paths') and quic_conn._network_paths:
-                        peer_addr = list(quic_conn._network_paths.keys())[0]
-                        connection_peers[id(writer)] = peer_addr[0]
-                        print(f"[TSQ-DEBUG] Captured peer: {peer_addr[0]}")
-        except Exception as e:
-            print(f"[TSQ-DEBUG] Could not extract peer: {e}")
-        
-        return original_handler(reader, writer)
     
     server = await serve(
         args.host,
         args.port,
         configuration=cfg,
-        stream_handler=wrapped_handler,
+        stream_handler=stream_handler,
     )
     
     print(f"[TSQ] Server ready")
