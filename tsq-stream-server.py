@@ -77,30 +77,30 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             return
         nonce = request_data[2:18]
         query_count += 1
-    
-    # Convert nanosecond timestamps to NTP format
-    NTP_EPOCH_OFFSET = 2208988800
-    
-    def ns_to_ntp(ns_timestamp):
-        seconds = ns_timestamp // 1_000_000_000
-        nanos = ns_timestamp % 1_000_000_000
-        ntp_seconds = seconds + NTP_EPOCH_OFFSET
-        ntp_fraction = int((nanos * 2**32) / 1_000_000_000)
-        return struct.pack("!II", ntp_seconds, ntp_fraction)
-    
-    # Convert T2 (receive timestamp)
-    ntp_t1 = ns_to_ntp(t1_recv)
-    
-    # Build response (without T3 yet)
-    response = b""
-    response += tlv_pack(T_NONCE, nonce)
-    response += tlv_pack(T_RECV_TS, ntp_t1)
-    
-    # Record T3 RIGHT BEFORE sending
-    t2_send = time.time_ns()
-    ntp_t2 = ns_to_ntp(t2_send)
-    response += tlv_pack(T_SEND_TS, ntp_t2)
-    
+        
+        # Convert nanosecond timestamps to NTP format
+        NTP_EPOCH_OFFSET = 2208988800
+        
+        def ns_to_ntp(ns_timestamp):
+            seconds = ns_timestamp // 1_000_000_000
+            nanos = ns_timestamp % 1_000_000_000
+            ntp_seconds = seconds + NTP_EPOCH_OFFSET
+            ntp_fraction = int((nanos * 2**32) / 1_000_000_000)
+            return struct.pack("!II", ntp_seconds, ntp_fraction)
+        
+        # Convert T2 (receive timestamp)
+        ntp_t1 = ns_to_ntp(t1_recv)
+        
+        # Build response (without T3 yet)
+        response = b""
+        response += tlv_pack(T_NONCE, nonce)
+        response += tlv_pack(T_RECV_TS, ntp_t1)
+        
+        # Record T3 RIGHT BEFORE sending
+        t2_send = time.time_ns()
+        ntp_t2 = ns_to_ntp(t2_send)
+        response += tlv_pack(T_SEND_TS, ntp_t2)
+        
         # Send response immediately
         writer.write(response)
         await writer.drain()
