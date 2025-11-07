@@ -1,0 +1,1064 @@
+
+
+
+
+Network Time Protocols                                       G. McCollum
+Internet-Draft                                             Cisco Systems
+Intended status: Experimental                              4 August 2025
+Expires: 5 February 2026
+
+
+                     Time Synchronization over QUIC
+                       draft-mccollum-ntp-tsq-00
+
+Abstract
+
+   This document proposes a modern, secure, and extensible time
+   synchronization protocol designed to operate over the QUIC transport
+   protocol.  Known as TSQ (Time Synchronization over QUIC), this
+   protocol aims to address the limitations of traditional NTP by
+   leveraging QUIC's encryption, widespread UDP/443 acceptance, and
+   multiplexed stream capabilities.  TSQ is designed for contemporary
+   deployment environments, including enterprise networks, cloud-native
+   systems, containers, and mobile devices, where traditional UDP-based
+   NTP struggles with security, scalability, or operational reliability.
+
+   This specification is published as an Experimental RFC.  See
+   Section 9 for details.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 5 February 2026.
+
+Copyright Notice
+
+   Copyright (c) 2025 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 1]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+   2.  Terminology . . . . . . . . . . . . . . . . . . . . . . . . .   3
+   3.  Scope and Goals . . . . . . . . . . . . . . . . . . . . . . .   3
+   4.  Protocol Overview . . . . . . . . . . . . . . . . . . . . . .   4
+   5.  TSQ Protocol Operation  . . . . . . . . . . . . . . . . . . .   4
+     5.1.  Connection Establishment  . . . . . . . . . . . . . . . .   4
+     5.2.  Message Exchange Flow . . . . . . . . . . . . . . . . . .   5
+     5.3.  Message Format and TLVs . . . . . . . . . . . . . . . . .   5
+       5.3.1.  TSQ Message Formats . . . . . . . . . . . . . . . . .   5
+       5.3.2.  TLV Type Registry . . . . . . . . . . . . . . . . . .   9
+     5.4.  Precision Mode  . . . . . . . . . . . . . . . . . . . . .  10
+     5.5.  QUIC Datagram Mode  . . . . . . . . . . . . . . . . . . .  11
+     5.6.  Error Handling  . . . . . . . . . . . . . . . . . . . . .  11
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  12
+     6.1.  Security Implications of Datagram Mode  . . . . . . . . .  13
+   7.  Signature Format and Verification . . . . . . . . . . . . . .  14
+   8.  Scalability and Deployment Considerations . . . . . . . . . .  15
+   9.  Experimental Criteria . . . . . . . . . . . . . . . . . . . .  16
+   10. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  17
+   11. Acknowledgments . . . . . . . . . . . . . . . . . . . . . . .  17
+   12. References  . . . . . . . . . . . . . . . . . . . . . . . . .  17
+     12.1.  Normative References . . . . . . . . . . . . . . . . . .  17
+     12.2.  Informative References . . . . . . . . . . . . . . . . .  18
+   Appendix A.  Comparison to Existing Protocols . . . . . . . . . .  18
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  19
+
+1.  Introduction
+
+   Time synchronization is foundational to modern computing.  It
+   underpins authentication systems, log correlation, distributed
+   transactions, and more.  NTP, the current standard, was designed in a
+   different era and brings challenges related to security, deployment
+   compatibility, and extensibility.  TSQ is proposed as a new protocol
+   built directly on top of QUIC, leveraging its modern transport
+   features to provide secure, authenticated, and operationally-friendly
+   time synchronization.
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 2]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+2.  Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+   document are to be interpreted as described in BCP 14 [RFC2119]
+   [RFC8174] when, and only when, they appear in all capitals, as shown
+   here.
+
+   *  *TSQ:* Time Synchronization over QUIC protocol.
+
+   *  *QUIC:* A secure, multiplexed transport protocol over UDP.
+
+   *  *TLV:* Type-Length-Value, a flexible message format.
+
+   *  *Precision Mode:* An OPTIONAL TSQ feature for low-jitter
+      synchronization.
+
+   *  *RTT:* Round-trip time.
+
+   *  *NTP:* Network Time Protocol.  A widely deployed protocol for
+      synchronizing clocks over IP networks, formally specified in
+      [RFC5905].  TSQ inherits its timestamp format from NTP but differs
+      in transport, security, and extensibility.
+
+3.  Scope and Goals
+
+   TSQ is intended to:
+
+   *  Provide secure and authenticated time synchronization
+
+   *  Support modern deployment scenarios
+
+   *  Operate in environments where UDP/123 is blocked
+
+   *  Be extensible and future-proof
+
+   *  Scale for enterprise and cloud
+
+   TSQ is _not_ intended to:
+
+   *  Replace NTP in ultra-precise or constrained devices
+
+   *  Replace public NTP infrastructure without optimization
+
+
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 3]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+4.  Protocol Overview
+
+   TSQ uses QUIC as its transport protocol, establishing secure
+   connections for the exchange of time synchronization messages.  TSQ
+   supports two transport modes: QUIC streams and QUIC datagrams.  Both
+   modes carry the same TLV-formatted message content, but differ in
+   reliability, latency, and use cases.
+
+   *Stream Mode:* Uses QUIC’s reliable, ordered streams.  This mode
+   ensures delivery and supports features like message signatures,
+   making it suitable for authenticated and auditable time
+   synchronization exchanges.
+
+   *Datagram Mode:* Uses QUIC DATAGRAM frames [RFC9221] for lower-
+   latency, unordered delivery.  This mode is suitable for fast,
+   opportunistic synchronization but offers no retransmission or
+   delivery guarantees.  Applications requiring integrity validation
+   SHOULD use Stream Mode.
+
+   A typical TSQ exchange (in either mode) consists of the following
+   steps:
+
+   1.  Client opens a QUIC connection to the TSQ server (typically using
+       UDP/443) and negotiates the TSQ protocol via ALPN.
+
+   2.  Client sends a TSQ Request with a nonce and a transmit timestamp
+       (T1).  To support stateless server deployments and ensure
+       robustness against replay attacks, clients MUST generate nonces
+       that are cryptographically secure, unpredictable, and
+       sufficiently long to avoid collisions.
+
+   3.  Server replies with a TSQ Response containing the echoed nonce,
+       the current server time, and two timestamps: the time the request
+       was received (T2) and the time the response was sent (T3).
+
+   4.  Client locally records its own receive time (T4), computes the
+       round-trip time (RTT), and derives the clock offset for
+       synchronization.
+
+5.  TSQ Protocol Operation
+
+5.1.  Connection Establishment
+
+   TSQ uses QUIC for transport, leveraging its handshake for mutual
+   authentication and encryption.  Clients MUST negotiate the TSQ
+   protocol using the ALPN identifier "tsq" during the QUIC handshake.
+   Short-lived or resumed QUIC connections MAY be used to optimize
+   performance.
+
+
+
+McCollum                 Expires 5 February 2026                [Page 4]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+5.2.  Message Exchange Flow
+
+   Each TSQ exchange consists of a request and response over a QUIC
+   stream.  Clients and servers MUST capture the following timestamps:
+
+   *  *T1 (Client Transmit Time):* The moment the client sends the TSQ
+      Request.
+
+   *  *T2 (Server Receive Time):* The moment the server receives the TSQ
+      Request.
+
+   *  *T3 (Server Transmit Time):* The moment the server sends the TSQ
+      Response.
+
+   *  *T4 (Client Receive Time):* The moment the client receives the TSQ
+      Response.
+
+   These timestamps enable the client to calculate round-trip time (RTT)
+   and clock offset.  T1 and T4 are recorded by the client and are not
+   transmitted.  T2 and T3 are included in the TSQ Response message
+   payload.
+
+                  Client                                   Server
+                    |                                         |
+                    | -------- QUIC Connection (tsq) -------> |
+                    |                                         |
+                    | ------ TSQ Request (T1, Nonce) -------> |
+                    |                                         |
+                    | <--- TSQ Response (T2, T3, Nonce) ----- |
+                    |                                         |
+                    |  (Records T4, computes offset & RTT)    |
+
+5.3.  Message Format and TLVs
+
+5.3.1.  TSQ Message Formats
+
+   TSQ uses a Type-Length-Value (TLV) format to encode fields within TSQ
+   Request and Response messages.  Each TLV is self-contained and
+   designed for easy extensibility.  The structure is as follows:
+
+
+
+
+
+
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 5]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+           0                   1                   2                   3
+           0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+          +--------+--------+--------------------------------------------+
+          | Type   | Length | Value (Length bytes)                       |
+          | (1 B)  | (1 B)  |                                            |
+          +--------+--------+--------------------------------------------+
+
+          - Type:   8-bit unsigned integer identifying the TLV type.
+          - Length: 8-bit unsigned integer specifying the length of the Value field.
+          - Value:  A variable-length field determined by Length.
+
+   All multi-byte fields within the Value are encoded in network byte
+   order (big-endian).
+
+   TSQ messages consist of a sequence of TLVs (Type-Length-Value
+   elements).  This format is consistent across both stream-based and
+   Datagram modes.  In Datagram Mode, all TLVs MUST still appear in a
+   well-defined order, beginning with the Nonce (Type 1).  Since QUIC
+   DATAGRAM frames do not provide ordering or framing guarantees,
+   implementations MUST treat the entire datagram payload as a single
+   TSQ message.  Partial or fragmented TLVs MUST NOT be used.
+
+   All TLVs follow a consistent format: a one-byte Type, a one-byte
+   Length, and a variable-length Value.  TLVs MUST be processed
+   sequentially, and unknown TLV types MUST be ignored unless policy
+   dictates otherwise.  The Signature Block TLV, if present, MUST appear
+   last.
+
+   TSQ Request Message TLVs:
+
+   *  *Nonce (Type 1):* 16 bytes.  A cryptographically secure random
+      value generated by the client.  Used to associate responses and
+      ensure freshness.  Copied back verbatim in the response.
+
+   *  *Transmit Timestamp (Type 2):* 8 bytes.  The time at which the
+      client sends the request.  Encoded as a 64-bit unsigned fixed-
+      point NTP timestamp.
+
+   TSQ Response Message TLVs:
+
+   *  *Nonce (Type 1):* 16 bytes.  Echoed from the request to associate
+      response with request.
+
+   *  *Server Time (Type 3):* 8 bytes.  The server's wall-clock time
+      when generating the response, in NTP format.
+
+   *  *Receive Timestamp (Type 4):* 8 bytes.  The server's local time
+      when the request was received, in NTP format.
+
+
+
+McCollum                 Expires 5 February 2026                [Page 6]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   *  *Send Timestamp (Type 5):* 8 bytes.  The server's local time when
+      the response was sent, in NTP format.
+
+   Optional TLVs are used to extend TSQ without altering the core
+   format.  These TLVs MUST follow standard TLV structure and be
+   included after the required fields in the message.  Each is defined
+   as follows:
+
+*  *Precision Mode Request (Type 250):* 0 bytes.  Included by the
+   client to request Precision Mode behavior.
+
+*  *Precision Mode Acknowledgment (Type 250):* 0 bytes.  Echoed by
+   the server to confirm support.
+
+*  *Time Source Info (Type 251):* Variable length.  Optionally
+   included by the server in the TSQ Response to indicate the current
+   stratum and synchronization source.  The format is as follows:
+
+                0                   1                   2                   3
+                0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+               +--------+--------+--------+--------+---------------------------+
+               | Stratum (1B)    | Source Type (1B) | Optional Info (n bytes)  |
+               +-----------------+------------------+--------------------------+
+
+               - Stratum:        0 (unsynchronized), 1 (reference), 2+ (as in NTP)
+               - Source Type:    1 = GPS, 2 = PTP, 3 = NTP, 4 = Manual, 5 = Unknown
+               - Optional Info:  Optional UTF-8 metadata or site-specific tags
+
+   Clients MAY use this TLV to assess time accuracy or for logging/
+   auditing.  Servers MAY omit this field, and clients MUST tolerate
+   its absence.
+
+*  *Signature Capability (Type 252):* 0 bytes.  Included by the
+   client to indicate that the response MUST include a Signature
+   Block (Type 255).  If this TLV is present in a TSQ Request and the
+   server does not include a valid Signature Block in the
+   corresponding TSQ Response, the client MUST treat the response as
+   unauthenticated and discard it.  This TLV enables policy-driven
+   enforcement of signed exchanges.
+
+*  *Metadata (Type 253):* Variable length.  Encoded as a series of
+   UTF-8 key-value pairs.  Each key and value is prefixed with a
+   single-byte length.  Example: [0x04] "site" [0x07] "us-east".  MAY
+   be repeated for multiple annotations.  Clients MUST ignore unknown
+   keys.
+
+   Example encoding:
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 7]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+              [0x04] 'site' [0x07] 'us-east'   --> 04 73 69 74 65 07 75 73 2d 65 61 73 74
+
+*  *Padding (Type 254):* Zero or more bytes.  Used to align total
+   message size for symmetry and minimize timing bias.  The value
+   MUST consist of zero-value bytes.  This TLV MAY appear multiple
+   times and MAY be placed anywhere in the message except before
+   required fields.
+
+*  *Signature Block (Type 255):* MUST be the final TLV in the
+   message.  Contains a digital signature over all prior TLVs in
+   their exact byte order.  The value contains the following fields:
+
+              0                   1                   2                   3
+              0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+             +--------+--------+--------+--------+---------------------------+
+             | Algorithm ID (1B) | Key ID (4B) | Signature Length (2B)       |
+             +-------------------+------------+-----------------------------+
+             |                                                       |
+             |               Signature Bytes (variable)              |
+             |                                                       |
+             +-------------------------------------------------------+
+
+   Field descriptions:
+
+   -  *Algorithm ID (1 byte):* Indicates the signature algorithm in
+      use.  See below.
+
+   -  *Key ID (4 bytes):* An identifier for the signing key (e.g.,
+      for key rotation).
+
+   -  *Signature Length (2 bytes):* Total number of signature bytes
+      to follow.
+
+   -  *Signature Bytes:* The raw signature output from the selected
+      algorithm.
+
+   Signatures MAY use [RFC8032] (Ed25519) or [RFC2104] (HMAC-SHA256),
+   depending on deployment policy.
+
+   All timestamps use the NTP format, a 64-bit unsigned fixed-point
+   representation: the upper 32 bits represent seconds since the NTP
+   epoch (January 1, 1900), and the lower 32 bits represent fractional
+   seconds.  This format ensures sub-microsecond resolution and
+   compatibility with existing time protocols.
+
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026                [Page 8]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+5.3.2.  TLV Type Registry
+
+   The following table summarizes the currently defined TSQ TLV types:
+
+   +=======+============+=============+=============+=================+
+   | Type  | Name       | Direction   | Required    | Description     |
+   +=======+============+=============+=============+=================+
+   | 1     | Nonce      | Request and | Yes         | Identifies      |
+   |       |            | Response    |             | exchange and    |
+   |       |            |             |             | prevents replay |
+   +-------+------------+-------------+-------------+-----------------+
+   | 2     | Transmit   | Request     | Yes         | Time client     |
+   |       | Timestamp  |             |             | sent request    |
+   |       |            |             |             | (T1)            |
+   +-------+------------+-------------+-------------+-----------------+
+   | 3     | Server     | Response    | Yes         | Current wall    |
+   |       | Time       |             |             | time at server  |
+   +-------+------------+-------------+-------------+-----------------+
+   | 4     | Receive    | Response    | Yes         | Time server     |
+   |       | Timestamp  |             |             | received        |
+   |       |            |             |             | request (T2)    |
+   +-------+------------+-------------+-------------+-----------------+
+   | 5     | Send       | Response    | Yes         | Time server     |
+   |       | Timestamp  |             |             | sent response   |
+   |       |            |             |             | (T3)            |
+   +-------+------------+-------------+-------------+-----------------+
+   | 6–249 | Reserved   | –           | No          | Reserved for    |
+   |       |            |             |             | future          |
+   |       |            |             |             | extension       |
+   +-------+------------+-------------+-------------+-----------------+
+   | 250   | Precision  | Request and | No          | Negotiate       |
+   |       | Mode Req/  | Response    |             | symmetric       |
+   |       | Ack        |             |             | message sizing  |
+   +-------+------------+-------------+-------------+-----------------+
+   | 251   | Time       | Response    | No          | Stratum and     |
+   |       | Source     |             |             | source metadata |
+   |       | Info       |             |             |                 |
+   +-------+------------+-------------+-------------+-----------------+
+   | 252   | Signature  | Request     | No          | Client requests |
+   |       | Capability |             |             | signed response |
+   +-------+------------+-------------+-------------+-----------------+
+   | 253   | Metadata   | Request and | No          | Deployment      |
+   |       |            | Response    |             | annotations     |
+   |       |            |             |             | (e.g., site ID) |
+   +-------+------------+-------------+-------------+-----------------+
+   | 254   | Padding    | Request and | No          | Zero-filled     |
+   |       |            | Response    |             | padding for     |
+   |       |            |             |             | alignment       |
+
+
+
+McCollum                 Expires 5 February 2026                [Page 9]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   +-------+------------+-------------+-------------+-----------------+
+   | 255   | Signature  | Response    | Conditional | Cryptographic   |
+   |       | Block      |             |             | signature of    |
+   |       |            |             |             | message         |
+   +-------+------------+-------------+-------------+-----------------+
+
+                                 Table 1
+
+   TLV Type values 6 through 249 are reserved for future use and MUST
+   NOT be assigned without IETF review.
+
+   All TLV types not listed here are reserved.  Future extensions MUST
+   use unique type values and follow the TLV format rules defined in
+   this section.  Implementations MUST ignore unknown TLV types unless
+   explicitly required by policy.
+
+5.4.  Precision Mode
+
+   Precision Mode is an OPTIONAL feature of TSQ designed to reduce
+   timing variance introduced by serialization delay and queuing
+   asymmetries.  It ensures that TSQ Request and Response messages are
+   of equal size to enable low-jitter, symmetric round-trip time
+   measurement.
+
+   *Negotiation:* Precision Mode is negotiated using TLV Type 250.  The
+   client includes a zero-length _Precision Mode Request_ TLV (Type 250)
+   in the TSQ Request to indicate support for Precision Mode.  If the
+   server also supports Precision Mode, it MUST include a zero-length
+   _Precision Mode Acknowledgment_ TLV (Type 250) in the TSQ Response.
+   If the server does not support Precision Mode, it MUST omit this TLV.
+   Clients MUST interpret the absence of the acknowledgment TLV as lack
+   of support and MAY either proceed without Precision Mode or fail the
+   exchange, based on local policy.
+
+   *Fixed-Length Packet Symmetry:* When Precision Mode is successfully
+   negotiated, both endpoints MUST ensure that the total byte length of
+   the TSQ Request and Response messages are identical.  To do so,
+   implementations MUST include a Padding TLV (Type 254) to pad the
+   message as needed.  Padding MUST consist entirely of zero-value bytes
+   and MUST appear after all other TLVs except the Signature Block.  If
+   used with the Signature Block TLV, Padding MUST appear immediately
+   before it.
+
+
+
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 10]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   *Interoperability:* Clients that require Precision Mode for accurate
+   clock synchronization SHOULD implement a fallback behavior if the
+   server does not acknowledge support.  The use of a dual-role TLV
+   (Type 250) avoids the need for separate type registration and keeps
+   the negotiation mechanism simple.  This TLV MAY be extended in the
+   future to include payload data for enhanced negotiation, though
+   current implementations MUST treat the TLV as zero-length.
+
+5.5.  QUIC Datagram Mode
+
+   In addition to stream-based transport, TSQ optionally supports
+   transmission over QUIC Datagrams [RFC9221] for low-latency,
+   unreliable synchronization exchanges.  This is referred to as
+   Datagram Mode.
+
+   *Operational Flow:* In Datagram Mode, the TSQ Request and Response
+   are each encoded as a single TLV-encoded message and transmitted in a
+   single QUIC DATAGRAM frame.  This eliminates the need for a stream-
+   based handshake, reducing round-trip latency.  There is no flow
+   control or retransmission of TSQ messages when sent this way.
+
+   *Message Format:* The message format is identical to stream-based
+   TSQ: a sequence of TLVs beginning with a Nonce (Type 1) and including
+   Server Time (Type 2), Receive/Send Timestamps, and optionally
+   Padding, Metadata, and Signature TLVs.  The same message structure
+   applies; only the transport differs.
+
+   *Negotiation:* Datagram Mode is implicitly negotiated via ALPN and
+   application profile.  If both client and server support it, the
+   client MAY send the first TSQ Request as a DATAGRAM.  If the server
+   replies using a DATAGRAM, the mode is established.  If the server
+   does not support DATAGRAM frames, it will not acknowledge or will
+   fall back to a stream-based response.  Clients MUST be prepared to
+   retry using stream-based transport.
+
+   *Trade-Offs:* Datagram Mode offers reduced latency and avoids head-
+   of-line blocking, but provides no delivery guarantees.  This makes it
+   suitable for approximate or opportunistic synchronization, but not
+   for authenticated, auditable timestamps.  Applications that require
+   signature validation, retransmission, or ordering SHOULD use stream-
+   based mode.
+
+5.6.  Error Handling
+
+   TSQ implementations MUST validate all TLV structures.  Malformed
+   messages SHOULD result in connection termination or silent discard.
+   Clients MUST handle missing or invalid nonce echoes and timestamp
+   anomalies.
+
+
+
+McCollum                 Expires 5 February 2026               [Page 11]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   Timestamp anomalies include any condition where the computed round-
+   trip time (RTT) or clock offset is implausible or mathematically
+   invalid.  This includes, but is not limited to:
+
+   *  RTT calculation results in a negative or zero duration.
+
+   *  Offset calculation exceeds deployment-defined thresholds (e.g., 24
+      hours).
+
+   *  Timestamps appear non-monotonic (e.g., T3 earlier than T2).
+
+   *  Receive time (T4) is earlier than transmit time (T1).
+
+   When encountering such anomalies, clients SHOULD discard the result,
+   log a warning or error for diagnostic purposes, and MAY retry the
+   exchange with a different server or after a short delay.
+   Implementations MAY apply sanity checks or rate limits to prevent
+   excessive retries in unstable environments.
+
+   Deployments requiring strict synchronization SHOULD implement anomaly
+   detection thresholds that align with operational tolerances (e.g.,
+   tolerable drift or jitter).  No synchronization adjustment MUST be
+   applied unless all four timestamps (T1–T4) are consistent and
+   validated.
+
+6.  Security Considerations
+
+   TSQ leverages QUIC's security model to ensure confidentiality,
+   integrity, and replay protection.  All TSQ messages are encapsulated
+   within encrypted QUIC streams or datagrams, depending on mode.
+
+   TSQ relies on the Application-Layer Protocol Negotiation (ALPN)
+   extension in QUIC to distinguish TSQ traffic from other application
+   protocols.  Implementations MUST verify that the negotiated ALPN
+   value is exactly "tsq".  Clients MUST reject any QUIC connection
+   where the negotiated ALPN does not exactly match "tsq".  Failure to
+   enforce ALPN validation could result in downgrade attacks where the
+   connection is interpreted as TSQ despite not meeting protocol
+   security requirements.
+
+   The QUIC handshake provides mutual authentication if certificates are
+   validated.  In TSQ, this ensures both the client and server are
+   communicating with authenticated endpoints.
+
+   Replay protection is achieved via QUIC's transport guarantees.
+   However, implementations MUST validate echoed nonces and timestamp
+   monotonicity to guard against application-level replay attacks.
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 12]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   TSQ supports a negotiation mechanism for clients that require signed
+   responses.  This is achieved using the Signature Capability TLV (Type
+   252), which signals that the client requires a digitally signed TSQ
+   Response.  Servers that receive this TLV MUST include a valid
+   Signature Block TLV (Type 255) in the response or fail the request.
+   If no Signature Block is present in the response, the client MUST
+   treat the exchange as unauthenticated and discard it.  This mechanism
+   ensures deterministic policy enforcement for deployments requiring
+   auditability.
+
+   TSQ supports optional digital signatures to support auditability or
+   long-term integrity.  Signatures MAY be generated using Ed25519 or
+   HMAC-SHA256 and included in the Signature Block TLV (Type 255).
+
+   For security implications specific to Datagram Mode, see Section 6.1.
+
+   The Time Source Info TLV (Type 251) provides optional metadata about
+   the server’s synchronization source and quality.  While useful for
+   transparency and diagnostics, clients MUST treat this TLV as
+   advisory.  It MUST NOT be used as a substitute for cryptographic
+   integrity or freshness validation.  Implementers SHOULD validate time
+   quality using signatures, replay protection, and out-of-band policy
+   when accuracy is critical.
+
+   Privacy-conscious deployments SHOULD minimize identifying metadata in
+   TSQ messages and MAY use ephemeral QUIC connections to reduce
+   correlation risk.  Servers MAY also implement rate-limiting to
+   mitigate client fingerprinting or denial-of-service vectors.
+
+6.1.  Security Implications of Datagram Mode
+
+   QUIC Datagram mode provides reduced latency and eliminates head-of-
+   line blocking, but introduces several important security trade-offs
+   compared to stream-based TSQ exchanges.
+
+   *  *Unreliability:* QUIC Datagram frames are not retransmitted or
+      acknowledged.  Messages may be lost, reordered, or duplicated.
+
+   *  *Spoofing Risk:* Since datagrams are stateless and unidirectional,
+      responses can be spoofed by an on-path attacker unless validated
+      using digital signatures.
+
+   *  *No Built-In Integrity:* QUIC Datagram mode lacks framing
+      guarantees.  Without the Signature Block TLV, clients have no
+      cryptographic assurance of authenticity or freshness.
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 13]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   As a result, clients that operate in Datagram Mode SHOULD treat
+   responses as advisory unless they include a valid Signature Block.
+   Implementations that require auditability, integrity guarantees, or
+   traceability SHOULD prefer stream-based TSQ exchanges.
+
+   Where Datagram Mode is used, deployments MAY enforce signature usage
+   via the Signature Capability TLV and validate all incoming messages
+   against known server credentials.
+
+7.  Signature Format and Verification
+
+   TSQ supports optional message-level signatures for deployments that
+   require auditability or long-term verifiability beyond QUIC's
+   ephemeral session security.  This mechanism is distinct from QUIC's
+   built-in authentication and confidentiality, and SHOULD only be
+   enabled when such properties are required.
+
+   When enabled, the TSQ Response MUST include a TLV extension of type
+   255 (0xFF), known as the Signature Block.
+
+   *  Signature Algorithm ID (1 byte)
+
+   *  Key ID (4 bytes)
+
+   *  Signature Length (2 bytes)
+
+   *  Signature Bytes
+
+   Supported signature algorithms:
+
+   *  *0x01:* Ed25519 using the standard Curve25519 curve
+
+   *  *0x02:* HMAC-SHA256 (requires shared secret)
+
+   The data to be signed MUST include (in order):
+
+   *  The echoed Nonce (Type 1)
+
+   *  Transmit Timestamp (Type 2)
+
+   *  Receive Timestamp (T2, Type 4)
+
+   *  Send Timestamp (T3, Type 5)
+
+   *  Optional TLVs (e.g., Metadata, Time Source Info), if present
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 14]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   Keys are provisioned out-of-band and identified by the Key ID.  TSQ
+   does not define a key distribution mechanism; implementers MAY use
+   mechanisms such as DNSSEC, enrollment protocols, or manual
+   configuration.
+
+   Use of signatures SHOULD be negotiated via a policy or deployment
+   profile.  Clients that require signatures but do not receive them
+   MUST treat the response as unauthenticated.
+
+   Signatures mitigate threats such as long-term forgery, post-session
+   repudiation, and auditing in compliance-sensitive deployments.  They
+   do not replace or extend QUIC's real-time transport security and
+   SHOULD NOT be used as a substitute for encrypted transport.
+
+   The presence of the Signature Capability TLV (Type 252) in the TSQ
+   Request mandates the inclusion of a valid Signature Block TLV in the
+   response.  Failure to comply MUST result in rejection of the response
+   by the client.  This provides a lightweight, in-band method to
+   enforce signature requirements on a per-request basis.
+
+8.  Scalability and Deployment Considerations
+
+   TSQ is designed to operate efficiently in large-scale, heterogeneous
+   environments.  It is suitable for use in enterprise, cloud-native,
+   and mobile scenarios where traditional NTP may encounter limitations
+   due to UDP/123 filtering, firewall traversal, or security posture.
+
+   QUIC’s stream multiplexing and NAT rebinding support allow TSQ to
+   serve mobile clients that frequently change IP addresses or network
+   paths.  Use of QUIC on UDP/443 also enables easier traversal through
+   firewalls and middleboxes.
+
+   TSQ connections are intended to be short-lived by default, allowing
+   high churn rates with minimal state retention.  However, QUIC session
+   resumption MAY be used to optimize recurring exchanges with known
+   servers.
+
+   Implementations MAY operate in a stateless mode by avoiding long-
+   lived session tracking and relying on QUIC’s address validation
+   tokens to prevent abuse.  Stateless designs are especially beneficial
+   for high-volume deployments such as cloud-based time services.
+
+   TSQ is not intended to replace the global NTP stratum hierarchy or
+   public time pool infrastructure directly.  However, it MAY be used in
+   conjunction with such infrastructure, particularly where UDP-based
+   protocols are not viable or additional metadata, security, or
+   auditability is required.
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 15]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   Servers MAY include a Time Source Info TLV in responses to expose
+   stratum or reference source.  This is particularly useful in
+   hierarchical deployments or enterprise deployments with multiple
+   upstream sources.  However, TSQ does not impose or rely on a strict
+   time hierarchy, and clients MUST treat this information as advisory.
+
+   TSQ supports an optional stateless design by allowing servers to
+   construct responses solely based on information included in the
+   client request, without maintaining per-client session state.
+   Specifically, the client's request includes a cryptographically
+   secure nonce, and all timestamps necessary for round-trip time (RTT)
+   calculation are echoed or generated in the response.  If signature-
+   based integrity protection is used, the server can sign the response
+   using a long-lived private key without needing to store session-
+   specific metadata.  This enables large-scale deployments where the
+   server handles a high volume of clients without incurring memory or
+   tracking overhead per connection.  However, implementations MUST
+   ensure that nonce uniqueness and freshness are sufficient to prevent
+   replay attacks and ambiguity in response validation.  In particular,
+   clients MUST generate cryptographically strong nonces using a secure
+   random number generator.  Nonces MUST be unpredictable and collision-
+   resistant, as servers may operate in a stateless mode and rely solely
+   on the nonce for response association.  The default 16-byte nonce
+   length is RECOMMENDED to ensure sufficient entropy for all deployment
+   sizes.  Reuse or predictability of nonces can lead to forged or
+   replayed responses, especially in datagram mode.
+
+9.  Experimental Criteria
+
+   This document is published as an Experimental RFC to evaluate the
+   viability and security of time synchronization over the QUIC
+   transport protocol.  The goals of this experiment are to:
+
+   *  Demonstrate successful time synchronization in varied environments
+      (e.g., cloud, mobile, IoT) where traditional NTP/NTS protocols
+      face limitations.
+
+   *  Validate interoperability between independent TSQ implementations
+      across QUIC versions and TLS stacks.
+
+   *  Evaluate the robustness of TSQ’s security model, including replay
+      prevention, signature validation, and support for stateless
+      operation.
+
+   *  Assess the practicality of TSQ’s Precision Mode and Datagram Mode
+      in real-world deployments.
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 16]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   *  Implementers are encouraged to produce and test against at least
+      one reference implementation that supports both Stream and
+      Datagram modes, and to validate fallback behaviors (e.g.,
+      unsupported Precision Mode or missing Signature Block) to ensure
+      graceful interoperability across partial implementations.
+
+   Feedback from implementers and operators will help determine whether
+   TSQ is suitable for progression to the Standards Track, and whether
+   refinements to the protocol, message formats, or security properties
+   are necessary.
+
+10.  IANA Considerations
+
+   This document requests IANA to register the following value in the
+   "TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs"
+   registry:
+
+   TSQ uses the ALPN identifier "tsq" to negotiate protocol support
+   during the TLS handshake [RFC7301].
+
+          +==========+=========================+===============+
+          | Protocol | Identification Sequence | Reference     |
+          +==========+=========================+===============+
+          | tsq      | 0x03 74 73 71 ("tsq")   | This document |
+          +----------+-------------------------+---------------+
+
+                                 Table 2
+
+   Per [RFC7301], this identifier is used during the TLS handshake to
+   indicate TSQ support.
+
+11.  Acknowledgments
+
+   Special thanks to Joe Clarke for insightful comments and review
+   during early iterations of this document.
+
+   Thanks also to participants in the NTP and QUIC IETF Working Groups
+   whose discussions and documents shaped many of the ideas in this
+   work.
+
+12.  References
+
+12.1.  Normative References
+
+   [RFC2104]  Krawczyk, H., Bellare, M., and R. Canetti, "HMAC: Keyed-
+              Hashing for Message Authentication", February 1997,
+              <https://www.rfc-editor.org/rfc/rfc2104.html>.
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 17]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119.html>.
+
+   [RFC7301]  Friedl, S., Popov, A., Langley, A., and E. Stebila,
+              "Transport Layer Security (TLS) Application-Layer Protocol
+              Negotiation Extension", July 2014,
+              <https://www.rfc-editor.org/rfc/rfc7301.html>.
+
+   [RFC8032]  Josefsson, S. and I. Liusvaara, "Edwards-Curve Digital
+              Signature Algorithm (EdDSA)", 2017,
+              <https://www.rfc-editor.org/rfc/rfc8032.html>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", May 2017,
+              <https://www.rfc-editor.org/rfc/rfc8174.html>.
+
+   [RFC9000]  Iyengar, J. and M. Thomson, "QUIC: A UDP-Based Multiplexed
+              and Secure Transport", May 2021,
+              <https://www.rfc-editor.org/rfc/rfc9000.html>.
+
+   [RFC9221]  Schinazi, D., "Using QUIC Datagrams with HTTP/3", June
+              2022, <https://www.rfc-editor.org/rfc/rfc9221.html>.
+
+12.2.  Informative References
+
+   [RFC5905]  Mills, D., Martin, J., Burbank, J., and W. Kasch, "Network
+              Time Protocol Version 4: Protocol and Algorithms
+              Specification", June 2010,
+              <https://www.rfc-editor.org/rfc/rfc5905.html>.
+
+   [RFC8915]  Franke, D., Sibold, D., Teichel, K., Malone, M., and A.
+              Sommers, "Network Time Security for the Network Time
+              Protocol", September 2020,
+              <https://www.rfc-editor.org/rfc/rfc8915.html>.
+
+   [I-D.ietf-ntp-roughtime]
+              Langley, A., Dowling, B., and G. Malone, "Roughtime", May
+              2024, <https://www.ietf.org/archive/id/draft-ietf-ntp-
+              roughtime-14.html>.
+
+Appendix A.  Comparison to Existing Protocols
+
+   The following table compares traditional time synchronization
+   approaches to TSQ:
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 18]
+
+Internet-Draft                     TSQ                       August 2025
+
+
+            +================+=====+=========+================+
+            |    Feature     | NTP |   NTS   |      TSQ       |
+            +================+=====+=========+================+
+            |   Transport    | UDP | UDP+TLS | QUIC (UDP/443) |
+            +----------------+-----+---------+----------------+
+            |   Encryption   |  No |   Yes   |     Always     |
+            +----------------+-----+---------+----------------+
+            | Extensibility  | Low |  Medium |      High      |
+            +----------------+-----+---------+----------------+
+            | Mobile Support |  No |    No   |      Yes       |
+            +----------------+-----+---------+----------------+
+            | Precision Mode |  No |    No   |      Yes       |
+            +----------------+-----+---------+----------------+
+
+                                  Table 3
+
+   TSQ and Roughtime serve complementary purposes.  While Roughtime
+   provides cryptographic attestation of coarse-grained time and
+   bootstraps trust in untrusted environments, TSQ is designed for
+   ongoing synchronization with higher precision, session continuity,
+   and transport-layer security.  TSQ may follow Roughtime during
+   startup or cold boot scenarios.
+
+Author's Address
+
+   Garrett McCollum
+   Cisco Systems
+   Email: gmccollu@cisco.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+McCollum                 Expires 5 February 2026               [Page 19]

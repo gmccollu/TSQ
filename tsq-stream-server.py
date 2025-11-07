@@ -48,21 +48,23 @@ def parse_tlvs(data: bytes) -> list:
         offset += consumed
     return tlvs
 
-def log_request(client_ip: str, status: str, error: str, processing_time_ms: float):
-    """Log client request with timestamp, IP, status, and timing"""
+def log_session(client_ip: str, query_count: int, duration_ms: float):
+    """Log client session with timestamp, IP, query count, and duration"""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
-    
-    processing_str = f"processing_time={processing_time_ms:.3f}ms" if processing_time_ms else "processing_time=N/A"
-    
-    if status == "SUCCESS":
-        print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} {processing_str}")
-    else:
-        print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} error=\"{error}\" {processing_str}")
+    print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream queries={query_count} duration={duration_ms:.1f}ms")
+
+def log_request(client_ip: str, status: str, error: str):
+    """Log failed request"""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
+    print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} error=\"{error}\"")
 
 async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     # Get client address
     peer_info = writer.get_extra_info('peername')
     client_ip = peer_info[0] if peer_info else 'unknown'
+    
+    session_start = time.time()
+    query_count = 0
     
     # Read request
     request_data = await reader.read(1024)
@@ -70,9 +72,10 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     
     # Parse nonce
     if len(request_data) < 18:
-        log_request(client_ip, "FAILED", "Request too short", None)
+        log_request(client_ip, "FAILED", "Request too short")
         return
     nonce = request_data[2:18]
+    query_count += 1
     
     # Convert nanosecond timestamps to NTP format
     NTP_EPOCH_OFFSET = 2208988800
@@ -101,14 +104,12 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     writer.write(response)
     await writer.drain()
     
-    # Calculate processing time
-    processing_time_ns = t2_send - t1_recv
-    processing_time_ms = processing_time_ns / 1_000_000.0
-    
-    log_request(client_ip, "SUCCESS", "", processing_time_ms)
-    
     # Keep open
     await asyncio.sleep(5)
+    
+    # Log session summary when closing
+    session_duration = (time.time() - session_start) * 1000.0  # Convert to ms
+    log_session(client_ip, query_count, session_duration)
 
 
 

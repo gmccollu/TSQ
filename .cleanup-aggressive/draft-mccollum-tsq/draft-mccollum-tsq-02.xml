@@ -1,0 +1,219 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE rfc SYSTEM "rfc2629.dtd">
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude" category="info" ipr="trust200902" docName="draft-mccollum-tsq-02" consensus="false">
+  <front>
+    <title abbrev="TSQ">Time Synchronization over QUIC</title>
+    <author fullname="Garrett McCollum" initials="G." surname="McCollum">
+      <organization>Cisco Systems</organization>
+      <address>
+        <email>gmccollu@cisco.com</email>
+      </address>
+    </author>
+    <date day="28" month="July" year="2025"/>
+    <workgroup>Network Time Protocols</workgroup>
+    <abstract>
+      <t>This document proposes a modern, secure, and extensible time synchronization protocol designed to operate over the QUIC transport protocol. Known as TSQ (Time Synchronization over QUIC), this protocol aims to address the limitations of traditional NTP by leveraging QUIC's encryption, widespread UDP/443 acceptance, and multiplexed stream capabilities. TSQ is designed for contemporary deployment environments, including enterprise networks, cloud-native systems, containers, and mobile devices, where traditional UDP-based NTP struggles with security, scalability, or operational reliability.</t>
+    </abstract>
+  </front>
+  <middle>
+    <section title="Introduction">
+      <t>Time synchronization is foundational to modern computing. It underpins authentication systems, log correlation, distributed transactions, and more. NTP, the current standard, was designed in a different era and brings challenges related to security, deployment compatibility, and extensibility. TSQ is proposed as a new protocol built directly on top of QUIC, leveraging its modern transport features to provide secure, authenticated, and operationally-friendly time synchronization.</t>
+    </section>
+    <section title="Scope and Goals">
+      <t>TSQ is intended to:</t>
+      <list style="symbols">
+        <t>Provide secure and authenticated time synchronization</t>
+        <t>Support modern deployment scenarios</t>
+        <t>Operate in environments where UDP/123 is blocked</t>
+        <t>Be extensible and future-proof</t>
+        <t>Scale for enterprise and cloud</t>
+      </list>
+      <t>TSQ is <em>not</em> intended to:</t>
+      <list style="symbols">
+        <t>Replace NTP in ultra-precise or constrained devices</t>
+        <t>Replace public NTP infrastructure without optimization</t>
+      </list>
+    </section>
+    <section title="Protocol Overview">
+      <t>TSQ uses QUIC as its transport, establishing secure, short-lived connections. A typical exchange:</t>
+      <list style="numbers">
+        <t>Client opens a QUIC connection to the TSQ server (UDP/443).</t>
+        <t>Client sends a TSQ Request with nonce and timestamp request.</t>
+        <t>Server replies with timestamps, echoed nonce, and metadata.</t>
+        <t>Client calculates RTT and adjusts clock accordingly.</t>
+      </list>
+    </section>
+    <section title="Security and Threat Model">
+      <t>TSQ relies on QUIC’s handshake for mutual authentication, confidentiality, and replay protection. Optional Ed25519 or HMAC signatures can be added if auditability is required. By default, QUIC session integrity suffices.</t>
+    </section>
+    <section title="Scalability Considerations">
+      <t>Short-lived connections, session resumption, and optional stateless design support scalability. TSQ is suitable for enterprise and cloud deployments.</t>
+    </section>
+    <section title="Message Format (TLV)">
+      <t>
+        <strong>TSQ Request</strong>
+      </t>
+      <list style="symbols">
+        <t>Type: 0x01</t>
+        <t>Nonce (16 bytes)</t>
+        <t>Optional extensions</t>
+      </list>
+      <t>
+        <strong>TSQ Response</strong>
+      </t>
+      <list style="symbols">
+        <t>Type: 0x02</t>
+        <t>Echoed Nonce</t>
+        <t>Server Time</t>
+        <t>Receive Timestamp</t>
+        <t>Send Timestamp</t>
+        <t>Optional metadata and signature</t>
+      </list>
+    </section>
+    <section title="Use Cases">
+      <list style="symbols">
+        <t>Cloud/container infrastructure</t>
+        <t>Mobile clients</t>
+        <t>Firewalled enterprise networks</t>
+        <t>High-precision timing visibility</t>
+      </list>
+    </section>
+    <section anchor="comparison" numbered="true" toc="default">
+      <name>Comparison to Existing Protocols</name>
+      <t>The following table highlights key differences between traditional NTP, NTS, and the proposed TSQ protocol:</t>
+      <texttable>
+        <ttcol align="center">Feature</ttcol>
+        <ttcol align="center">NTP</ttcol>
+        <ttcol align="center">NTS</ttcol>
+        <ttcol align="center">TSQ</ttcol>
+        <c>Transport</c>
+        <c>UDP</c>
+        <c>UDP+TLS</c>
+        <c>QUIC (UDP/443)</c>
+        <c>Encryption</c>
+        <c>No</c>
+        <c>Yes</c>
+        <c>Always</c>
+        <c>Extensibility</c>
+        <c>Low</c>
+        <c>Medium</c>
+        <c>High</c>
+        <c>Mobile Support</c>
+        <c>No</c>
+        <c>No</c>
+        <c>Yes</c>
+        <c>Precision Mode</c>
+        <c>No</c>
+        <c>No</c>
+        <c>Yes</c>
+      </texttable>
+    </section>
+    <section title="QUIC Overview">
+      <t>QUIC is a UDP-based transport protocol that provides multiplexed, stream-based delivery with built-in encryption and connection migration. It combines transport and cryptographic handshake layers, simplifying deployment behind NATs and firewalls. TSQ builds on QUIC to inherit its confidentiality, integrity, and path-resilience characteristics.</t>
+    </section>
+    <section title="Clarification of Mobile Support">
+      <t>Mobile support in TSQ leverages QUIC's connection ID and migration capabilities. When a mobile device changes IP addresses (e.g., Wi-Fi to LTE), the QUIC connection remains valid as long as the connection ID is preserved, enabling uninterrupted time synchronization.</t>
+    </section>
+    <section title="Clarification of Precision Mode">
+      <t>Precision Mode refers to TSQ’s optional support for fixed-length packets and constant-time processing. This reduces jitter introduced by variable processing times and packet sizes, improving accuracy in latency-sensitive environments.</t>
+    </section>
+    <section title="Explanation of Server Time Field">
+      <t>The Server Time field in TSQ responses provides a consistent reference for clients even when timestamp echoing is used. Including it explicitly simplifies validation and debugging, particularly when clock discrepancies or replay concerns are involved.</t>
+    </section>
+    <section title="Packet Symmetry Considerations">
+      <t>To minimize timing variance, TSQ recommends maintaining symmetry between request and response packet sizes. While QUIC encrypts and pads payloads, preserving symmetry at the application level helps reduce bias in round-trip delay calculations.</t>
+    </section>
+    <section title="QUIC Multiplexing and Port 443">
+      <t>TSQ can coexist with other protocols over QUIC on port 443 using Application-Layer Protocol Negotiation (ALPN). This avoids conflicts and enables unified endpoint services, allowing TSQ to blend with HTTPS or other QUIC-based services on the same port.</t>
+    </section>
+    <section title="QUIC Datagram Crypto Considerations">
+      <t>TSQ may also use QUIC datagrams for lightweight synchronization. These datagrams are encrypted and authenticated using the same keys as QUIC streams but offer unreliable delivery. The transport-layer AEAD encryption offloads per-packet crypto from the application, maintaining confidentiality without additional cost to TSQ servers.</t>
+    </section>
+    <section title="Next Steps">
+      <list style="symbols">
+        <t>Solicit feedback on sync behavior and design</t>
+        <t>Improve trust and crypto model</t>
+        <t>Implement prototype in QUIC</t>
+        <t>Submit official Internet-Draft if interest grows</t>
+      </list>
+    </section>
+    <section title="Acknowledgments">
+      <t>Thanks to contributors from the QUIC and NTP working groups for input on timing accuracy and protocol design.</t>
+    </section>
+    <section title="Relationship to Roughtime">
+      <t>
+        Roughtime <xref target="ROUGHTIME"/> is a secure time authentication protocol designed to provide coarse-grained time (typically accurate within a few seconds) using cryptographic proofs. It is particularly useful in scenarios where a system needs to verify that its clock is reasonably accurate before performing sensitive operations such as certificate validation.
+      </t>
+      <t>
+        Unlike TSQ, which aims to deliver secure and precise time synchronization suitable for continuous use in enterprise, mobile, and containerized environments, Roughtime focuses on bootstrapping trust in time from potentially untrusted states. Roughtime servers are stateless and optimized for high-throughput, low-complexity validation rather than tight synchronization.
+      </t>
+      <t>
+        As such, TSQ and Roughtime serve complementary purposes. Roughtime may help systems establish an initial level of temporal trust, while TSQ provides ongoing synchronization over a secure and extensible transport protocol.
+      </t>
+    </section>
+  </middle>
+  <back>
+    <references>
+      <reference anchor="RFC8915">
+        <front>
+          <title>Network Time Security for the Network Time Protocol</title>
+          <author initials="D." surname="Franke" fullname="Daniel Franke"/>
+          <author initials="D." surname="Sibold" fullname="Dieter Sibold"/>
+          <author initials="K." surname="Teichel" fullname="Kristof Teichel"/>
+          <author initials="M." surname="Dansarie" fullname="Marcus Dansarie"/>
+          <author initials="R." surname="Sundblad" fullname="Ragnar Sundblad"/>
+        </front>
+        <seriesInfo name="RFC" value="8915"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/rfc8915"/>
+      </reference>
+      <reference anchor="RFC7384">
+        <front>
+          <title>Security Requirements of Time Protocols in Packet Switched Networks</title>
+          <author initials="T." surname="Mizrahi" fullname="Tal Mizrahi"/>
+        </front>
+        <seriesInfo name="RFC" value="7384"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/rfc7384"/>
+      </reference>
+      <reference anchor="RFC9000">
+        <front>
+          <title>QUIC: A UDP‑Based Multiplexed and Secure Transport</title>
+          <author initials="J." surname="Iyengar" fullname="Jana Iyengar"/>
+          <author initials="M." surname="Thomson" fullname="Martin Thomson"/>
+        </front>
+        <seriesInfo name="RFC" value="9000"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/rfc9000"/>
+      </reference>
+      <reference anchor="RFC9221">
+        <front>
+          <title>An Unreliable Datagram Extension to QUIC</title>
+          <author initials="T." surname="Pauly" fullname="Tommy Pauly"/>
+          <author initials="E." surname="Kinnear" fullname="Eric Kinnear"/>
+          <author initials="D." surname="Schinazi" fullname="David Schinazi"/>
+        </front>
+        <seriesInfo name="RFC" value="9221"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/rfc9221"/>
+      </reference>
+      <reference anchor="RFC9308">
+        <front>
+          <title>Applicability of the QUIC Transport Protocol</title>
+          <author initials="M." surname="Kühlewind" fullname="Mirja Kühlewind"/>
+          <author initials="B." surname="Trammell" fullname="Brian Trammell"/>
+        </front>
+        <seriesInfo name="RFC" value="9308"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/rfc9308"/>
+      </reference>
+      <reference anchor="ROUGHTIME">
+        <front>
+          <title>Roughtime</title>
+          <author initials="W." surname="Ladd" fullname="Watson Ladd"/>
+          <author initials="M." surname="Dansarie" fullname="Marcus Dansarie"/>
+        </front>
+        <seriesInfo name="Internet-Draft" value="draft-ietf-ntp-roughtime-14"/>
+        <format type="HTML" target="https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-14"/>
+      </reference>
+    </references>
+    <section title="IANA Considerations">
+      <t>This document has no IANA actions.</t>
+    </section>
+  </back>
+</rfc>

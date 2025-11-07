@@ -5,6 +5,12 @@ use std::net;
 use std::collections::HashMap;
 use ring::rand::SecureRandom;
 
+// Track connection statistics
+struct ConnectionStats {
+    query_count: usize,
+    first_query: std::time::Instant,
+}
+
 const MAX_DATAGRAM_SIZE: usize = 1350;
 const LOCAL_CONN_ID_LEN: usize = 16;
 const MAX_IDLE_TIMEOUT_MS: u64 = 30000;
@@ -77,6 +83,7 @@ fn main() {
     
     let mut clients: HashMap<quiche::ConnectionId<'static>, quiche::Connection> = HashMap::new();
     let mut client_addrs: HashMap<quiche::ConnectionId<'static>, net::SocketAddr> = HashMap::new();
+    let mut client_stats: HashMap<quiche::ConnectionId<'static>, ConnectionStats> = HashMap::new();
     
     let local_addr = socket.local_addr().unwrap();
     
@@ -165,24 +172,24 @@ fn main() {
                 
                 // Process TSQ request
                 match handle_tsq_request(dgram) {
-                    Some((response, t2, t3)) => {
-                        // Calculate RTT and offset for logging
-                        let rtt_ns = t3.saturating_sub(t2);
-                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
+                    Some((response, _t2, _t3)) => {
+                        // Track query count
+                        let stats = client_stats.entry(conn_id.clone()).or_insert(ConnectionStats {
+                            query_count: 0,
+                            first_query: std::time::Instant::now(),
+                        });
+                        stats.query_count += 1;
                         
                         // Send response datagram
                         match conn.dgram_send(&response) {
-                            Ok(_) => {
-                                log_request(&from, "SUCCESS", "", Some(rtt_ms), None);
-                            },
+                            Ok(_) => {},
                             Err(e) => {
                                 eprintln!("[TSQ-Q] dgram_send failed: {:?}", e);
-                                log_request(&from, "FAILED", "Send failed", Some(rtt_ms), None);
                             }
                         }
                     },
                     None => {
-                        log_request(&from, "FAILED", "Invalid request", None, None);
+                        eprintln!("[TSQ-Q] Invalid TSQ request");
                     }
                 }
             }
@@ -208,8 +215,26 @@ fn main() {
         // Periodic cleanup of closed connections
         if clients.len() > MAX_CLIENTS {
             let before = clients.len();
+            
+            // Log stats for closed connections before removing them
+            let closed_ids: Vec<_> = clients.iter()
+                .filter(|(_, conn)| conn.is_closed() || conn.is_timed_out())
+                .map(|(id, _)| id.clone())
+                .collect();
+            
+            for conn_id in &closed_ids {
+                if let Some(addr) = client_addrs.get(conn_id) {
+                    if let Some(stats) = client_stats.get(conn_id) {
+                        let duration = stats.first_query.elapsed();
+                        log_session(addr, stats.query_count, duration.as_secs_f64() * 1000.0);
+                    }
+                }
+            }
+            
             clients.retain(|_, conn| !conn.is_closed() && !conn.is_timed_out());
             client_addrs.retain(|id, _| clients.contains_key(id));
+            client_stats.retain(|id, _| clients.contains_key(id));
+            
             let after = clients.len();
             if before != after {
                 println!("[TSQ-Q] Cleaned up {} closed connections", before - after);
@@ -285,19 +310,14 @@ fn ns_to_ntp(ns: u64) -> [u8; 8] {
     result
 }
 
-fn log_request(peer: &net::SocketAddr, status: &str, error: &str, processing_time_ms: Option<f64>, _offset_ms: Option<f64>) {
+fn log_session(peer: &net::SocketAddr, query_count: usize, duration_ms: f64) {
     let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
-    
-    let processing_str = match processing_time_ms {
-        Some(ms) => format!("processing_time={:.3}ms", ms),
-        None => "processing_time=N/A".to_string(),
-    };
-    
-    if status == "SUCCESS" {
-        println!("[TSQ-LOG] {} client={} protocol=datagram status={} {}", 
-                 timestamp, peer.ip(), status, processing_str);
-    } else {
-        println!("[TSQ-LOG] {} client={} protocol=datagram status={} error=\"{}\" {}", 
-                 timestamp, peer.ip(), status, error, processing_str);
-    }
+    println!("[TSQ-LOG] {} client={} protocol=datagram queries={} duration={:.1}ms", 
+             timestamp, peer.ip(), query_count, duration_ms);
+}
+
+fn log_request(peer: &net::SocketAddr, status: &str, error: &str, _processing_time_ms: Option<f64>, _offset_ms: Option<f64>) {
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
+    println!("[TSQ-LOG] {} client={} protocol=datagram status={} error=\"{}\"", 
+             timestamp, peer.ip(), status, error);
 }
