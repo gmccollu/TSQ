@@ -195,30 +195,18 @@ async def main():
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
     
-    # Create server with custom protocol
-    loop = asyncio.get_event_loop()
+    # Use aioquic's serve with our custom protocol
+    from aioquic.asyncio.server import serve as aioquic_serve
     
-    # Create UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((args.host, args.port))
-    
-    # Create protocol factory
-    def create_protocol():
-        return TSQProtocol(
-            configuration=cfg,
-            stream_handler=stream_handler,
-        )
-    
-    # Create endpoint
-    transport, protocol = await loop.create_datagram_endpoint(
-        create_protocol,
-        sock=sock,
+    server = await aioquic_serve(
+        args.host,
+        args.port,
+        configuration=cfg,
+        create_protocol=TSQProtocol,
+        stream_handler=stream_handler,
     )
     
     print(f"[TSQ] Server ready")
-    
-    # Keep server running
-    server = type('Server', (), {'close': lambda: transport.close(), 'wait_closed': lambda: asyncio.sleep(0)})()
     try:
         await asyncio.Future()  # Run forever until Ctrl+C
     except KeyboardInterrupt:
