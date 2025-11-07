@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""TSQ Server - Version 2024-11-05-12:18"""
+import asyncio
+import struct
+import time
+import argparse
+from aioquic.asyncio import serve
+from aioquic.quic.configuration import QuicConfiguration
+
+VERSION = "2024-11-05-12:18"
+ALPN = ["tsq/1"]
+
+# TLV: 1 byte Type, 1 byte Length (per draft-mccollum-ntp-tsq-01), then Value
+# Types:
+#   1 = Nonce (16 bytes)
+#   2 = Receive Timestamp (8 bytes, NTP format)
+#   3 = Send Timestamp (8 bytes, NTP format)
+
+T_NONCE = 1
+T_RECV_TS = 2
+T_SEND_TS = 3
+
+def tlv_unpack(data: bytes):
+    """Unpack a single TLV from data. Returns (type, value, bytes_consumed)."""
+    if len(data) < 2:
+        raise ValueError("TLV too short")
+    t = data[0]
+    l = data[1]
+    if len(data) < 2 + l:
+        raise ValueError("TLV length mismatch")
+    v = data[2:2+l]
+    return t, v, 2 + l
+
+def tlv_pack(t: int, v: bytes) -> bytes:
+    """Pack a TLV with 1-byte length field."""
+    if len(v) > 255:
+        raise ValueError("TLV value too long (max 255 bytes)")
+    return struct.pack("!BB", t, len(v)) + v
+
+def parse_tlvs(data: bytes) -> list:
+    """Parse all TLVs from data. Returns list of (type, value) tuples."""
+    tlvs = []
+    offset = 0
+    while offset < len(data):
+        t, v, consumed = tlv_unpack(data[offset:])
+        tlvs.append((t, v))
+        offset += consumed
+    return tlvs
+
+async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    # Read request
+    request_data = await reader.read(1024)
+    t1_recv = time.time_ns()
+    print(f"[TSQ] Received {len(request_data)} bytes")
+    
+    # Parse nonce
+    if len(request_data) < 18:
+        return
+    nonce = request_data[2:18]
+    
+    # Convert nanosecond timestamps to NTP format
+    NTP_EPOCH_OFFSET = 2208988800
+    
+    def ns_to_ntp(ns_timestamp):
+        seconds = ns_timestamp // 1_000_000_000
+        nanos = ns_timestamp % 1_000_000_000
+        ntp_seconds = seconds + NTP_EPOCH_OFFSET
+        ntp_fraction = int((nanos * 2**32) / 1_000_000_000)
+        return struct.pack("!II", ntp_seconds, ntp_fraction)
+    
+    # Convert T2 (receive timestamp)
+    ntp_t1 = ns_to_ntp(t1_recv)
+    
+    # Build response (without T3 yet)
+    response = b""
+    response += tlv_pack(T_NONCE, nonce)
+    response += tlv_pack(T_RECV_TS, ntp_t1)
+    
+    # Record T3 RIGHT BEFORE sending
+    t2_send = time.time_ns()
+    ntp_t2 = ns_to_ntp(t2_send)
+    response += tlv_pack(T_SEND_TS, ntp_t2)
+    
+    # Send response immediately
+    print(f"[TSQ] Sending {len(response)} bytes")
+    writer.write(response)
+    await writer.drain()
+    print("[TSQ] Response sent")
+    
+    # Keep open
+    await asyncio.sleep(5)
+
+
+
+
+# Keep track of active stream tasks
+active_tasks = set()
+
+def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    # aioquic calls this synchronously, so we spawn our async handler
+    task = asyncio.create_task(handle_stream(reader, writer))
+    active_tasks.add(task)
+    task.add_done_callback(active_tasks.discard)
+
+
+async def main():
+    ap = argparse.ArgumentParser(description="TSQ QUIC Server")
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=443)
+    ap.add_argument("--cert", default="server.crt")
+    ap.add_argument("--key", default="server.key")
+    args = ap.parse_args()
+
+    cfg = QuicConfiguration(is_client=False, alpn_protocols=ALPN)
+    cfg.load_cert_chain(args.cert, args.key)
+
+    print(f"[TSQ] Server Version {VERSION}")
+    print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
+    # ⚙️ create server and keep it alive
+    server = await serve(args.host, args.port, configuration=cfg, stream_handler=stream_handler)
+    try:
+        await asyncio.Future()  # Run forever until Ctrl+C
+    except KeyboardInterrupt:
+        print("\n[TSQ] Server stopped.")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+if __name__ == "__main__":
+    asyncio.run(main())

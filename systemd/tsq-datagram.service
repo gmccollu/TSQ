@@ -1,0 +1,19 @@
+[Unit]
+Description=TSQ Datagram Server
+After=network.target
+Documentation=https://github.com/gmccollu/TSQ
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/tsq-datagram-server \
+  --listen 0.0.0.0:443 \
+  --cert /etc/letsencrypt/live/tsq.gmccollu.com/fullchain.pem \
+  --key /etc/letsencrypt/live/tsq.gmccollu.com/privkey.pem
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=TSQ Stream Server
+After=network.target
+Documentation=https://github.com/gmccollu/TSQ
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/tsq
+ExecStart=/opt/tsq/venv/bin/python3 /opt/tsq/tsq-stream-server.py \
+  --host 0.0.0.0 \
+  --port 8443 \
+  --cert /etc/letsencrypt/live/tsq.gmccollu.com/fullchain.pem \
+  --key /etc/letsencrypt/live/tsq.gmccollu.com/privkey.pem
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

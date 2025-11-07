@@ -1,0 +1,63 @@
+# Build artifacts
+rust/target/
+*.o
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+tsq-venv/
+tsq-test-venv/
+venv/
+env/
+
+# Certificates
+*.crt
+*.key
+*.pem
+tsq-certs/
+
+# Test/benchmark files (contain credentials/IPs)
+comprehensive_benchmark.py
+benchmark_*.py
+*_test.py
+compare_all.py
+kill_servers.py
+check_status.py
+run_tsq_sync.py
+tsq_test_runner.py
+
+# Results
+*.json
+*.log
+
+# Backup files
+*_OLD.*
+*_NEW.*
+*.bak
+*~
+
+# Internal documentation
+*_ANALYSIS.md
+*_FINDINGS.md
+*_CHECKLIST.md
+*_SUMMARY.md
+*_READINESS.md
+*_READY.md
+NEXT_STEPS.md
+QUICK_FIXES.md
+GITHUB_FILES_LIST.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

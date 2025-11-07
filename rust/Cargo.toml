@@ -1,0 +1,24 @@
+[package]
+name = "tsq-quiche"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quiche = "0.21"
+ring = "0.17"
+mio = { version = "0.8", features = ["os-poll", "net"] }
+url = "2"
+libc = "0.2"
+chrono = "0.4"
+
+[[bin]]
+name = "tsq-datagram-server"
+path = "src/server.rs"
+
+[[bin]]
+name = "tsq-datagram-client"
+path = "src/client.rs"
+
+[[bin]]
+name = "tsq-datagram-adjtime"
+path = "src/adjtime.rs"
