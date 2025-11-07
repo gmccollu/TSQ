@@ -6,10 +6,10 @@ import time
 import argparse
 import sys
 from datetime import datetime, timezone
-from aioquic.asyncio import serve, QuicConnectionProtocol
-from aioquic.asyncio.protocol import QuicStreamHandler
+from aioquic.asyncio import QuicConnectionProtocol
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import StreamDataReceived
+from aioquic.quic.events import QuicEvent, StreamDataReceived
+import socket
 
 # Force unbuffered output for systemd
 sys.stdout.reconfigure(line_buffering=True)
@@ -157,8 +157,29 @@ def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     task.add_done_callback(active_tasks.discard)
 
 
-# Store peer addresses globally (keyed by connection)
+# Store peer addresses globally (keyed by stream ID)
 peer_addresses = {}
+
+# Custom protocol to track peer addresses
+class TSQProtocol(QuicConnectionProtocol):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._peer_addr = None
+    
+    def connection_made(self, transport):
+        super().connection_made(transport)
+        # Get peer address from transport
+        self._peer_addr = transport.get_extra_info('peername')
+        if self._peer_addr:
+            print(f"[TSQ] New QUIC connection from {self._peer_addr[0]}")
+    
+    def quic_event_received(self, event: QuicEvent):
+        if isinstance(event, StreamDataReceived):
+            # Store peer address for this stream
+            if self._peer_addr:
+                peer_addresses[event.stream_id] = self._peer_addr[0]
+        
+        super().quic_event_received(event)
 
 async def main():
     ap = argparse.ArgumentParser(description="TSQ QUIC Server")
@@ -174,26 +195,30 @@ async def main():
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
     
-    # Create custom session_established callback to capture peer address
-    from aioquic.asyncio.server import QuicServer
+    # Create server with custom protocol
+    loop = asyncio.get_event_loop()
     
-    original_stream_handler = stream_handler
+    # Create UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((args.host, args.port))
     
-    def handler_with_addr(reader, writer):
-        # Try to get peer address from the QUIC connection
-        # The writer has a _protocol attribute that contains the QuicConnectionProtocol
-        if hasattr(writer, '_protocol'):
-            protocol = writer._protocol
-            if hasattr(protocol, '_quic') and hasattr(protocol._quic, '_peer_address'):
-                peer_addr = protocol._quic._peer_address
-                print(f"[TSQ-DEBUG] Got peer from QUIC: {peer_addr}")
-                if peer_addr:
-                    peer_addresses[id(writer)] = peer_addr[0]
-        
-        return original_stream_handler(reader, writer)
+    # Create protocol factory
+    def create_protocol():
+        return TSQProtocol(
+            configuration=cfg,
+            stream_handler=stream_handler,
+        )
     
-    # ⚙️ create server and keep it alive
-    server = await serve(args.host, args.port, configuration=cfg, stream_handler=handler_with_addr)
+    # Create endpoint
+    transport, protocol = await loop.create_datagram_endpoint(
+        create_protocol,
+        sock=sock,
+    )
+    
+    print(f"[TSQ] Server ready")
+    
+    # Keep server running
+    server = type('Server', (), {'close': lambda: transport.close(), 'wait_closed': lambda: asyncio.sleep(0)})()
     try:
         await asyncio.Future()  # Run forever until Ctrl+C
     except KeyboardInterrupt:
