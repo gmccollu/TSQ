@@ -63,6 +63,8 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     peer_info = writer.get_extra_info('peername')
     client_ip = peer_info[0] if peer_info else 'unknown'
     
+    print(f"[TSQ] New stream connection from {client_ip}")
+    
     session_start = time.time()
     query_count = 0
     
@@ -112,16 +114,19 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         print(f"[TSQ] Error handling stream: {e}")
     finally:
         # Always log session summary when closing
+        print(f"[TSQ] Closing connection from {client_ip}, queries={query_count}")
         session_duration = (time.time() - session_start) * 1000.0  # Convert to ms
         if query_count > 0:
             log_session(client_ip, query_count, session_duration)
+        else:
+            print(f"[TSQ] No queries processed for {client_ip}")
         
         # Close writer
         try:
             writer.close()
             await writer.wait_closed()
-        except:
-            pass
+        except Exception as e:
+            print(f"[TSQ] Error closing writer: {e}")
 
 
 
