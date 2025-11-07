@@ -158,20 +158,31 @@ fn main() {
             while let Ok(len) = conn.dgram_recv(&mut buf) {
                 if len > buf.len() {
                     eprintln!("[TSQ-Q] Datagram too large: {} bytes", len);
+                    log_request(&from, "FAILED", "Datagram too large", None, None);
                     continue;
                 }
                 let dgram = &buf[..len];
                 
-                println!("[TSQ-Q] Received datagram: {} bytes", len);
-                
                 // Process TSQ request
-                if let Some(response) = handle_tsq_request(dgram) {
-                    println!("[TSQ-Q] Sending response: {} bytes", response.len());
-                    
-                    // Send response datagram
-                    match conn.dgram_send(&response) {
-                        Ok(_) => println!("[TSQ-Q] Response queued"),
-                        Err(e) => eprintln!("[TSQ-Q] dgram_send failed: {:?}", e),
+                match handle_tsq_request(dgram) {
+                    Some((response, t2, t3)) => {
+                        // Calculate RTT and offset for logging
+                        let rtt_ns = t3.saturating_sub(t2);
+                        let rtt_ms = rtt_ns as f64 / 1_000_000.0;
+                        
+                        // Send response datagram
+                        match conn.dgram_send(&response) {
+                            Ok(_) => {
+                                log_request(&from, "SUCCESS", "", Some(rtt_ms), None);
+                            },
+                            Err(e) => {
+                                eprintln!("[TSQ-Q] dgram_send failed: {:?}", e);
+                                log_request(&from, "FAILED", "Send failed", Some(rtt_ms), None);
+                            }
+                        }
+                    },
+                    None => {
+                        log_request(&from, "FAILED", "Invalid request", None, None);
                     }
                 }
             }
@@ -207,7 +218,7 @@ fn main() {
     }
 }
 
-fn handle_tsq_request(data: &[u8]) -> Option<Vec<u8>> {
+fn handle_tsq_request(data: &[u8]) -> Option<(Vec<u8>, u64, u64)> {
     // Record receive timestamp
     let t2_recv = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_nanos() as u64,
@@ -256,7 +267,7 @@ fn handle_tsq_request(data: &[u8]) -> Option<Vec<u8>> {
     response.push(8);
     response.extend_from_slice(&ns_to_ntp(t3_send));
     
-    Some(response)
+    Some((response, t2_recv, t3_send))
 }
 
 fn ns_to_ntp(ns: u64) -> [u8; 8] {
@@ -272,4 +283,21 @@ fn ns_to_ntp(ns: u64) -> [u8; 8] {
     result[0..4].copy_from_slice(&ntp_seconds.to_be_bytes());
     result[4..8].copy_from_slice(&ntp_fraction.to_be_bytes());
     result
+}
+
+fn log_request(peer: &net::SocketAddr, status: &str, error: &str, processing_time_ms: Option<f64>, _offset_ms: Option<f64>) {
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
+    
+    let processing_str = match processing_time_ms {
+        Some(ms) => format!("processing_time={:.3}ms", ms),
+        None => "processing_time=N/A".to_string(),
+    };
+    
+    if status == "SUCCESS" {
+        println!("[TSQ-LOG] {} client={} protocol=datagram status={} {}", 
+                 timestamp, peer.ip(), status, processing_str);
+    } else {
+        println!("[TSQ-LOG] {} client={} protocol=datagram status={} error=\"{}\" {}", 
+                 timestamp, peer.ip(), status, error, processing_str);
+    }
 }

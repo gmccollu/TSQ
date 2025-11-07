@@ -4,6 +4,7 @@ import asyncio
 import struct
 import time
 import argparse
+from datetime import datetime, timezone
 from aioquic.asyncio import serve
 from aioquic.quic.configuration import QuicConfiguration
 
@@ -47,14 +48,29 @@ def parse_tlvs(data: bytes) -> list:
         offset += consumed
     return tlvs
 
+def log_request(client_ip: str, status: str, error: str, processing_time_ms: float):
+    """Log client request with timestamp, IP, status, and timing"""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
+    
+    processing_str = f"processing_time={processing_time_ms:.3f}ms" if processing_time_ms else "processing_time=N/A"
+    
+    if status == "SUCCESS":
+        print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} {processing_str}")
+    else:
+        print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} error=\"{error}\" {processing_str}")
+
 async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    # Get client address
+    peer_info = writer.get_extra_info('peername')
+    client_ip = peer_info[0] if peer_info else 'unknown'
+    
     # Read request
     request_data = await reader.read(1024)
     t1_recv = time.time_ns()
-    print(f"[TSQ] Received {len(request_data)} bytes")
     
     # Parse nonce
     if len(request_data) < 18:
+        log_request(client_ip, "FAILED", "Request too short", None)
         return
     nonce = request_data[2:18]
     
@@ -82,10 +98,14 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     response += tlv_pack(T_SEND_TS, ntp_t2)
     
     # Send response immediately
-    print(f"[TSQ] Sending {len(response)} bytes")
     writer.write(response)
     await writer.drain()
-    print("[TSQ] Response sent")
+    
+    # Calculate processing time
+    processing_time_ns = t2_send - t1_recv
+    processing_time_ms = processing_time_ns / 1_000_000.0
+    
+    log_request(client_ip, "SUCCESS", "", processing_time_ms)
     
     # Keep open
     await asyncio.sleep(5)

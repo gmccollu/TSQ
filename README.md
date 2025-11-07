@@ -605,6 +605,79 @@ sudo pkill -9 <process-name>
 
 ---
 
+## Server Logging
+
+### Usage Tracking
+
+TSQ servers log all client requests for monitoring and analysis:
+
+**Log Format:**
+```
+[TSQ-LOG] 2025-11-07 18:30:45.123 UTC client=203.0.113.42 protocol=datagram status=SUCCESS processing_time=0.123ms
+[TSQ-LOG] 2025-11-07 18:30:46.456 UTC client=198.51.100.10 protocol=stream status=SUCCESS processing_time=0.234ms
+[TSQ-LOG] 2025-11-07 18:30:47.789 UTC client=192.0.2.5 protocol=datagram status=FAILED error="Invalid request" processing_time=N/A
+```
+
+**Logged Information:**
+- Timestamp (UTC)
+- Client IP address
+- Protocol (datagram or stream)
+- Status (SUCCESS or FAILED)
+- Processing time
+- Error message (if failed)
+
+### Viewing Logs
+
+**On systemd systems:**
+```bash
+# View recent logs
+sudo journalctl -u tsq-datagram -u tsq-stream -n 100
+
+# Follow logs in real-time
+sudo journalctl -u tsq-datagram -u tsq-stream -f
+
+# Filter for specific client
+sudo journalctl -u tsq-datagram -u tsq-stream | grep "client=203.0.113.42"
+
+# Show only failures
+sudo journalctl -u tsq-datagram -u tsq-stream | grep "status=FAILED"
+```
+
+### Log Analysis
+
+Use the included `analyze-logs.sh` script to generate usage statistics:
+
+```bash
+./analyze-logs.sh
+```
+
+**Output includes:**
+- Total requests and success rate
+- Requests by protocol (datagram vs stream)
+- Unique client count
+- Top clients by request volume
+- Average processing time
+- Daily activity breakdown
+- Common error types
+
+### Privacy Considerations
+
+**What we log:**
+- ✅ Client IP addresses (for debugging and statistics)
+- ✅ Request timestamps
+- ✅ Success/failure status
+- ✅ Performance metrics
+
+**What we DON'T log:**
+- ❌ No personally identifiable information
+- ❌ No time offset values
+- ❌ No certificate details
+- ❌ No payload contents
+
+**Note:** Logs are stored in systemd journal and rotated automatically. Consider anonymizing or aggregating IP addresses for long-term storage if privacy is a concern.
+
+---
+
 ## Security Considerations
 
 ### Certificate Verification
