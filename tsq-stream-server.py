@@ -63,9 +63,9 @@ def log_request(client_ip: str, status: str, error: str):
     print(f"[TSQ-LOG] {timestamp} client={client_ip} protocol=stream status={status} error=\"{error}\"")
 
 async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    # Get client address
-    peer_info = writer.get_extra_info('peername')
-    client_ip = peer_info[0] if peer_info else 'unknown'
+    # Get client address from stored peer addresses
+    writer_id = id(writer)
+    client_ip = peer_addresses.get(writer_id, 'unknown')
     
     print(f"[TSQ] New stream connection from {client_ip}")
     
@@ -125,6 +125,9 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         else:
             print(f"[TSQ] No queries processed for {client_ip}")
         
+        # Clean up stored peer address
+        peer_addresses.pop(writer_id, None)
+        
         # Close writer
         try:
             writer.close()
@@ -140,10 +143,20 @@ active_tasks = set()
 
 def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     # aioquic calls this synchronously, so we spawn our async handler
+    # Try to get the actual peer address from the transport
+    transport = writer.transport
+    if hasattr(transport, '_transport') and hasattr(transport._transport, '_addr'):
+        # aioquic wraps the transport, dig into it
+        peer_addr = transport._transport._addr
+        print(f"[TSQ-DEBUG] Got peer address from transport: {peer_addr}")
+    
     task = asyncio.create_task(handle_stream(reader, writer))
     active_tasks.add(task)
     task.add_done_callback(active_tasks.discard)
 
+
+# Store peer addresses globally (keyed by connection)
+peer_addresses = {}
 
 async def main():
     ap = argparse.ArgumentParser(description="TSQ QUIC Server")
@@ -158,8 +171,22 @@ async def main():
 
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
+    
+    # Create custom handler that captures peer address
+    def handler_with_addr(reader, writer):
+        # Get peer from socket if available
+        sock = writer.get_extra_info('socket')
+        peername = writer.get_extra_info('peername')
+        print(f"[TSQ-DEBUG] Socket: {sock}, Peername: {peername}")
+        
+        # Store for later use
+        if peername:
+            peer_addresses[id(writer)] = peername[0]
+        
+        return stream_handler(reader, writer)
+    
     # ⚙️ create server and keep it alive
-    server = await serve(args.host, args.port, configuration=cfg, stream_handler=stream_handler)
+    server = await serve(args.host, args.port, configuration=cfg, stream_handler=handler_with_addr)
     try:
         await asyncio.Future()  # Run forever until Ctrl+C
     except KeyboardInterrupt:
