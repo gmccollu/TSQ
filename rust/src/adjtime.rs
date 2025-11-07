@@ -1,7 +1,7 @@
 // TSQ Time Adjustment Tool - Datagrams Version
 // Synchronize system clock using TSQ QUIC Datagrams
 
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use quiche::ConnectionId;
@@ -52,9 +52,12 @@ impl TSQAdjTime {
         socket.set_nonblocking(true)
             .map_err(|e| format!("Failed to set nonblocking: {}", e))?;
 
+        // Resolve hostname to IP address
         let peer_addr: SocketAddr = format!("{}:{}", server, self.port)
-            .parse()
-            .map_err(|e| format!("Invalid server address: {}", e))?;
+            .to_socket_addrs()
+            .map_err(|e| format!("Failed to resolve hostname: {}", e))?
+            .next()
+            .ok_or_else(|| format!("No addresses found for {}", server))?;
 
         // Create QUIC config
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)
@@ -336,9 +339,28 @@ impl TSQAdjTime {
                 }
             }
 
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            unsafe {
+                // macOS uses adjtime() which takes a timeval for the delta
+                let offset_sec = (offset_ms / 1000.0) as libc::time_t;
+                let offset_usec = ((offset_ms % 1000.0) * 1000.0) as libc::suseconds_t;
+                
+                let delta = libc::timeval {
+                    tv_sec: offset_sec,
+                    tv_usec: offset_usec,
+                };
+                
+                let result = libc::adjtime(&delta, std::ptr::null_mut());
+                if result != 0 {
+                    return Err("Failed to adjust clock via adjtime".to_string());
+                }
+                
+                self.log("INFO", "Note: macOS slew rate is fixed at ~500 ppm");
+            }
+
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
-                return Err("Slew adjustment only supported on Linux".to_string());
+                return Err("Slew adjustment only supported on Linux and macOS".to_string());
             }
 
             self.log("INFO", "Clock slewed successfully (will adjust gradually)");

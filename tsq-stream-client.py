@@ -15,10 +15,15 @@ import statistics
 from datetime import datetime
 import ctypes
 import ctypes.util
+import platform
 
 # aioquic imports
 from aioquic.asyncio.client import connect
 from aioquic.quic.configuration import QuicConfiguration
+
+# Detect OS
+IS_LINUX = platform.system() == 'Linux'
+IS_MACOS = platform.system() == 'Darwin'
 
 # Linux timex structure for adjtimex
 class Timex(ctypes.Structure):
@@ -44,6 +49,13 @@ class Timex(ctypes.Structure):
         ("stbcnt", ctypes.c_long),
         ("tai", ctypes.c_int),
         ("_padding", ctypes.c_int * 11),
+    ]
+
+# macOS timeval structure for adjtime
+class Timeval(ctypes.Structure):
+    _fields_ = [
+        ("tv_sec", ctypes.c_long),
+        ("tv_usec", ctypes.c_long),
     ]
 
 # adjtimex modes
@@ -188,60 +200,101 @@ class TSQAdjTime:
         return median_offset, stdev_offset
     
     def adjust_clock(self, offset_ms):
-        """Adjust the system clock"""
+        """Adjust system clock by offset_ms milliseconds"""
         if self.dry_run:
-            self.log(f"DRY RUN: Would adjust clock by {offset_ms:.3f}ms", "INFO")
+            self.log(f"DRY RUN: Would adjust clock by {offset_ms:.3f}ms")
             return True
-        
-        # Check if we're root
-        if os.geteuid() != 0:
-            self.log("ERROR: Must run as root to adjust system clock", "ERROR")
-            return False
         
         try:
-            # Convert ms to microseconds for adjtimex
-            offset_us = int(offset_ms * 1000)
-            
-            # Determine if we should slew or step
-            if abs(offset_ms) <= self.slew_threshold_ms:
-                # Slew (gradual adjustment)
-                self.log(f"Slewing clock by {offset_ms:.3f}ms (gradual adjustment)")
-                
-                libc = ctypes.CDLL(ctypes.util.find_library("c"))
-                tx = Timex()
-                tx.modes = ADJ_OFFSET | ADJ_MICRO
-                tx.offset = offset_us
-                
-                result = libc.adjtimex(ctypes.byref(tx))
-                if result == -1:
-                    self.log("Failed to adjust clock via adjtimex", "ERROR")
-                    return False
-                
-                self.log(f"Clock slewed successfully (will adjust gradually)")
-                
+            if IS_LINUX:
+                return self._adjust_clock_linux(offset_ms)
+            elif IS_MACOS:
+                return self._adjust_clock_macos(offset_ms)
             else:
-                # Step (immediate adjustment)
-                self.log(f"Stepping clock by {offset_ms:.3f}ms (immediate adjustment)")
-                
-                # Use settimeofday for immediate step
-                import subprocess
-                offset_sec = offset_ms / 1000.0
-                result = subprocess.run(
-                    ["date", "-s", f"@{time.time() + offset_sec}"],
-                    capture_output=True
-                )
-                
-                if result.returncode != 0:
-                    self.log(f"Failed to step clock: {result.stderr.decode()}", "ERROR")
-                    return False
-                
-                self.log(f"Clock stepped successfully")
-            
-            return True
-            
+                self.log(f"Unsupported OS: {platform.system()}", "ERROR")
+                self.log("Clock adjustment only supported on Linux and macOS", "ERROR")
+                return False
         except Exception as e:
             self.log(f"Error adjusting clock: {e}", "ERROR")
             return False
+    
+    def _adjust_clock_linux(self, offset_ms):
+        """Adjust clock on Linux using adjtimex"""
+        # Convert ms to microseconds for adjtimex
+        offset_us = int(offset_ms * 1000)
+        
+        # Determine if we should slew or step
+        if abs(offset_ms) <= self.slew_threshold_ms:
+            # Slew (gradual adjustment)
+            self.log(f"Slewing clock by {offset_ms:.3f}ms (gradual adjustment)")
+            
+            libc = ctypes.CDLL(ctypes.util.find_library("c"))
+            tx = Timex()
+            tx.modes = ADJ_OFFSET | ADJ_MICRO
+            tx.offset = offset_us
+            
+            result = libc.adjtimex(ctypes.byref(tx))
+            if result == -1:
+                self.log("Failed to adjust clock via adjtimex", "ERROR")
+                return False
+            
+            self.log(f"Clock slewed successfully (will adjust gradually)")
+            
+        else:
+            # Step (immediate adjustment)
+            self.log(f"Stepping clock by {offset_ms:.3f}ms (immediate adjustment)")
+            
+            # Use settimeofday for immediate step
+            import subprocess
+            offset_sec = offset_ms / 1000.0
+            result = subprocess.run(
+                ["date", "-s", f"@{time.time() + offset_sec}"],
+                capture_output=True
+            )
+            
+            if result.returncode != 0:
+                self.log(f"Failed to step clock: {result.stderr.decode()}", "ERROR")
+                return False
+            
+            self.log(f"Clock stepped successfully")
+        
+        return True
+    
+    def _adjust_clock_macos(self, offset_ms):
+        """Adjust clock on macOS using adjtime"""
+        # macOS only supports slew (gradual adjustment)
+        # The slew_threshold parameter is ignored on macOS
+        
+        if abs(offset_ms) > self.slew_threshold_ms:
+            self.log(f"Note: macOS only supports gradual adjustment (slew)", "WARN")
+            self.log(f"Large offset of {offset_ms:.3f}ms will be adjusted gradually", "WARN")
+        
+        self.log(f"Slewing clock by {offset_ms:.3f}ms (gradual adjustment)")
+        
+        # Convert ms to seconds and microseconds
+        offset_sec = int(offset_ms / 1000)
+        offset_usec = int((offset_ms % 1000) * 1000)
+        
+        libc = ctypes.CDLL(ctypes.util.find_library("c"))
+        
+        # Create delta timeval
+        delta = Timeval()
+        delta.tv_sec = offset_sec
+        delta.tv_usec = offset_usec
+        
+        # Create olddelta timeval (we don't use it but adjtime requires it)
+        olddelta = Timeval()
+        
+        # Call adjtime
+        result = libc.adjtime(ctypes.byref(delta), ctypes.byref(olddelta))
+        if result == -1:
+            self.log("Failed to adjust clock via adjtime", "ERROR")
+            return False
+        
+        self.log(f"Clock slewed successfully (will adjust gradually)")
+        self.log(f"Note: macOS slew rate is fixed at ~500 ppm", "INFO")
+        
+        return True
     
     async def sync(self):
         """Main synchronization routine"""

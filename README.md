@@ -34,6 +34,11 @@ Both implementations provide **TLS 1.3 encrypted time synchronization**, address
 
 ### Prerequisites
 
+**Supported Platforms:**
+- ✅ **Linux** - Full support (query + clock adjustment)
+- ✅ **macOS** - Full support (query + clock adjustment)
+- ⚠️ **Windows** - Query only (clock adjustment not yet supported)
+
 **For Python Streams:**
 ```bash
 python3 -m venv tsq-venv
@@ -374,8 +379,39 @@ Port 443 requires root/administrator privileges:
 
 Adjusting the system clock requires elevated privileges:
 - **Linux:** `sudo` required
-- **Mac:** `sudo` required  
+- **macOS:** `sudo` required  
 - **Windows:** Administrator required
+
+#### Platform Support
+
+**Clock adjustment is currently supported on Linux and macOS:**
+
+| Platform | Support | Method | Notes |
+|----------|---------|--------|-------|
+| **Linux** | ✅ Full | `adjtimex()` | Supports both slew and step adjustment |
+| **macOS** | ✅ Partial | `adjtime()` | Only gradual adjustment (slew) |
+| **Windows** | ❌ Not yet | - | Planned for future release |
+| **BSD** | ⚠️ Untested | `adjtime()` | Should work like macOS |
+
+**Linux Features:**
+- ✅ Gradual adjustment (slew) for small offsets
+- ✅ Immediate adjustment (step) for large offsets
+- ✅ Configurable slew threshold (default: 500ms)
+- ✅ Full control over adjustment behavior
+
+**macOS Limitations:**
+- ⚠️ Only gradual adjustment (slew) available
+- ⚠️ Fixed slew rate (~500 ppm, ~43 seconds per day)
+- ⚠️ Slew threshold parameter ignored
+- ⚠️ Large offsets still adjusted gradually (may take time)
+- ℹ️ For large offsets (>1 second), consider using system tools
+
+**Query-only mode works on all platforms:**
+```bash
+# Measure offset without adjusting clock (works everywhere)
+./rust/target/release/tsq-datagram-client tsq.gmccollu.com --port 443
+python3 tsq-stream-client.py tsq.gmccollu.com --port 8443 --dry-run
+```
 
 #### Clock Adjustment Methods
 
