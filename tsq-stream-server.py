@@ -4,9 +4,13 @@ import asyncio
 import struct
 import time
 import argparse
+import sys
 from datetime import datetime, timezone
 from aioquic.asyncio import serve
 from aioquic.quic.configuration import QuicConfiguration
+
+# Force unbuffered output for systemd
+sys.stdout.reconfigure(line_buffering=True)
 
 VERSION = "2024-11-05-12:18"
 ALPN = ["tsq/1"]
