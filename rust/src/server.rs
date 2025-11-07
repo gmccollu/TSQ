@@ -212,33 +212,28 @@ fn main() {
             }
         }
         
-        // Periodic cleanup of closed connections
-        if clients.len() > MAX_CLIENTS {
-            let before = clients.len();
-            
-            // Log stats for closed connections before removing them
-            let closed_ids: Vec<_> = clients.iter()
-                .filter(|(_, conn)| conn.is_closed() || conn.is_timed_out())
-                .map(|(id, _)| id.clone())
-                .collect();
-            
-            for conn_id in &closed_ids {
-                if let Some(addr) = client_addrs.get(conn_id) {
-                    if let Some(stats) = client_stats.get(conn_id) {
+        // Check for closed connections and log them
+        let closed_ids: Vec<_> = clients.iter()
+            .filter(|(_, conn)| conn.is_closed() || conn.is_timed_out())
+            .map(|(id, _)| id.clone())
+            .collect();
+        
+        for conn_id in &closed_ids {
+            if let Some(addr) = client_addrs.get(conn_id) {
+                if let Some(stats) = client_stats.get(conn_id) {
+                    if stats.query_count > 0 {
                         let duration = stats.first_query.elapsed();
                         log_session(addr, stats.query_count, duration.as_secs_f64() * 1000.0);
                     }
                 }
             }
-            
+        }
+        
+        // Cleanup closed connections
+        if !closed_ids.is_empty() {
             clients.retain(|_, conn| !conn.is_closed() && !conn.is_timed_out());
             client_addrs.retain(|id, _| clients.contains_key(id));
             client_stats.retain(|id, _| clients.contains_key(id));
-            
-            let after = clients.len();
-            if before != after {
-                println!("[TSQ-Q] Cleaned up {} closed connections", before - after);
-            }
         }
     }
 }
