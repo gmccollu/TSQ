@@ -6,8 +6,10 @@ import time
 import argparse
 import sys
 from datetime import datetime, timezone
-from aioquic.asyncio import serve
+from aioquic.asyncio import serve, QuicConnectionProtocol
+from aioquic.asyncio.protocol import QuicStreamHandler
 from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import StreamDataReceived
 
 # Force unbuffered output for systemd
 sys.stdout.reconfigure(line_buffering=True)
@@ -172,18 +174,23 @@ async def main():
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
     
-    # Create custom handler that captures peer address
+    # Create custom session_established callback to capture peer address
+    from aioquic.asyncio.server import QuicServer
+    
+    original_stream_handler = stream_handler
+    
     def handler_with_addr(reader, writer):
-        # Get peer from socket if available
-        sock = writer.get_extra_info('socket')
-        peername = writer.get_extra_info('peername')
-        print(f"[TSQ-DEBUG] Socket: {sock}, Peername: {peername}")
+        # Try to get peer address from the QUIC connection
+        # The writer has a _protocol attribute that contains the QuicConnectionProtocol
+        if hasattr(writer, '_protocol'):
+            protocol = writer._protocol
+            if hasattr(protocol, '_quic') and hasattr(protocol._quic, '_peer_address'):
+                peer_addr = protocol._quic._peer_address
+                print(f"[TSQ-DEBUG] Got peer from QUIC: {peer_addr}")
+                if peer_addr:
+                    peer_addresses[id(writer)] = peer_addr[0]
         
-        # Store for later use
-        if peername:
-            peer_addresses[id(writer)] = peername[0]
-        
-        return stream_handler(reader, writer)
+        return original_stream_handler(reader, writer)
     
     # ⚙️ create server and keep it alive
     server = await serve(args.host, args.port, configuration=cfg, stream_handler=handler_with_addr)
