@@ -67,7 +67,7 @@ def log_request(client_ip: str, status: str, error: str):
 async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     # Get client address from stored peer addresses
     writer_id = id(writer)
-    client_ip = peer_addresses.get(writer_id, 'unknown')
+    client_ip = connection_peers.get(writer_id, 'unknown')
     
     print(f"[TSQ] New stream connection from {client_ip}")
     
@@ -128,7 +128,7 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             print(f"[TSQ] No queries processed for {client_ip}")
         
         # Clean up stored peer address
-        peer_addresses.pop(writer_id, None)
+        connection_peers.pop(writer_id, None)
         
         # Close writer
         try:
@@ -157,29 +157,8 @@ def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     task.add_done_callback(active_tasks.discard)
 
 
-# Store peer addresses globally (keyed by stream ID)
-peer_addresses = {}
-
-# Custom protocol to track peer addresses
-class TSQProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._peer_addr = None
-    
-    def connection_made(self, transport):
-        super().connection_made(transport)
-        # Get peer address from transport
-        self._peer_addr = transport.get_extra_info('peername')
-        if self._peer_addr:
-            print(f"[TSQ] New QUIC connection from {self._peer_addr[0]}")
-    
-    def quic_event_received(self, event: QuicEvent):
-        if isinstance(event, StreamDataReceived):
-            # Store peer address for this stream
-            if self._peer_addr:
-                peer_addresses[event.stream_id] = self._peer_addr[0]
-        
-        super().quic_event_received(event)
+# Store peer addresses globally - map from connection to peer IP
+connection_peers = {}
 
 async def main():
     ap = argparse.ArgumentParser(description="TSQ QUIC Server")
@@ -195,15 +174,35 @@ async def main():
     print(f"[TSQ] Server Version {VERSION}")
     print(f"[TSQ] Server listening on {args.host}:{args.port} (UDP/QUIC)")
     
-    # Use aioquic's serve with our custom protocol
-    from aioquic.asyncio.server import serve as aioquic_serve
+    # Wrap stream handler to capture connection info
+    from aioquic.asyncio import serve
     
-    server = await aioquic_serve(
+    # Create a wrapper that extracts peer info from the server's connection registry
+    original_handler = stream_handler
+    
+    def wrapped_handler(reader, writer):
+        # The writer object has a _protocol which has _quic which has the connection
+        # Try to extract peer from the QUIC layer
+        try:
+            if hasattr(writer, '_protocol'):
+                proto = writer._protocol
+                if hasattr(proto, '_quic'):
+                    quic_conn = proto._quic
+                    # The QUIC connection has _network_paths which contains peer addresses
+                    if hasattr(quic_conn, '_network_paths') and quic_conn._network_paths:
+                        peer_addr = list(quic_conn._network_paths.keys())[0]
+                        connection_peers[id(writer)] = peer_addr[0]
+                        print(f"[TSQ-DEBUG] Captured peer: {peer_addr[0]}")
+        except Exception as e:
+            print(f"[TSQ-DEBUG] Could not extract peer: {e}")
+        
+        return original_handler(reader, writer)
+    
+    server = await serve(
         args.host,
         args.port,
         configuration=cfg,
-        create_protocol=TSQProtocol,
-        stream_handler=stream_handler,
+        stream_handler=wrapped_handler,
     )
     
     print(f"[TSQ] Server ready")
