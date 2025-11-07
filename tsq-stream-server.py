@@ -66,16 +66,17 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     session_start = time.time()
     query_count = 0
     
-    # Read request
-    request_data = await reader.read(1024)
-    t1_recv = time.time_ns()
-    
-    # Parse nonce
-    if len(request_data) < 18:
-        log_request(client_ip, "FAILED", "Request too short")
-        return
-    nonce = request_data[2:18]
-    query_count += 1
+    try:
+        # Read request
+        request_data = await reader.read(1024)
+        t1_recv = time.time_ns()
+        
+        # Parse nonce
+        if len(request_data) < 18:
+            log_request(client_ip, "FAILED", "Request too short")
+            return
+        nonce = request_data[2:18]
+        query_count += 1
     
     # Convert nanosecond timestamps to NTP format
     NTP_EPOCH_OFFSET = 2208988800
@@ -100,16 +101,27 @@ async def handle_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     ntp_t2 = ns_to_ntp(t2_send)
     response += tlv_pack(T_SEND_TS, ntp_t2)
     
-    # Send response immediately
-    writer.write(response)
-    await writer.drain()
-    
-    # Keep open
-    await asyncio.sleep(5)
-    
-    # Log session summary when closing
-    session_duration = (time.time() - session_start) * 1000.0  # Convert to ms
-    log_session(client_ip, query_count, session_duration)
+        # Send response immediately
+        writer.write(response)
+        await writer.drain()
+        
+        # Keep open
+        await asyncio.sleep(5)
+        
+    except Exception as e:
+        print(f"[TSQ] Error handling stream: {e}")
+    finally:
+        # Always log session summary when closing
+        session_duration = (time.time() - session_start) * 1000.0  # Convert to ms
+        if query_count > 0:
+            log_session(client_ip, query_count, session_duration)
+        
+        # Close writer
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except:
+            pass
 
 
 
